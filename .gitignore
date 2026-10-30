@@ -1,0 +1,16 @@
+# build
+/.gradle/
+/build/
+/app/build/
+/dist/
+/local.properties
+.kotlin/
+# secretos: nunca
+*.jks
+*.keystore
+*.p12
+secrets.properties
+# editor
+.idea/
+*.iml
+.DS_Store
