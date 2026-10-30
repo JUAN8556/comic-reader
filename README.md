@@ -7,6 +7,16 @@ desde la tablet, y la cachea para leer sin conexión. Inspirado en Cover – Com
 Kotlin + Jetpack Compose, un solo módulo. Se compila por línea de comandos desde una
 Mac (`make help`) y se instala por adb inalámbrico. Sin Android Studio.
 
+## Estado
+
+MVP integrado el 30-oct-2026: biblioteca como espejo de Drive con pilas de portadas, «Leyendo ahora», ficha de
+serie, búsqueda, ajustes, y un lector con los cuatro modos (una página, doble automática en horizontal, vertical
+continuo y manga por libro, carpeta o global). Además, caché de 20 GB que deja siempre 15 GB libres, «fijar» para leer
+sin conexión, progreso con copia en Drive y tema de alto contraste para el modo Ink Paper. Compila, la build de
+release pasa R8 y la suite JVM está en verde, pero **aún no se ha probado en la tablet**. Pantallas, flujos, ajustes,
+cómo instalar (`make dev`) y lo que queda fuera: [docs/APP.md](docs/APP.md). La sonda del 30-oct sigue dentro, en
+Ajustes → Diagnóstico ([docs/SONDA.md](docs/SONDA.md)).
+
 ## Privacidad
 
 La app es de uso personal y no la distribuye nadie. Accede a Google Drive solo con el

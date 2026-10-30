@@ -4,6 +4,8 @@ El APK sonda es la primera rebanada de «Cómics»: entra en Drive con la hoja n
 
 Build de desarrollo: paquete `mx.jano.comics.debug`, nombre «Cómics dev». Convive con la build diaria (`mx.jano.comics`).
 
+**Desde el MVP (30-oct) la app arranca en la biblioteca** y la sonda vive en **Ajustes → Diagnóstico**, con los mismos botones y el mismo registro. Pantallas, flujos y ajustes de la app: `docs/APP.md`.
+
 ## Antes de instalar
 
 1. La consola de Google tiene que estar hecha (`docs/CONSOLA-GOOGLE.md`). Para la sonda importan tres cosas: el cliente Android **`mx.jano.comics.debug`** con la SHA-1 de `make sha1`, la app **publicada** («En producción», no «Testing») y el correo propio añadido como usuario.
@@ -16,6 +18,8 @@ cd ~/comic-reader
 make connect      # empareja o conecta la tablet por Wi-Fi (toolkit 01-wireless.sh)
 make dev          # build debug firmada con ~/.android/comics.jks (contraseña del llavero) + instalar + abrir
 ```
+
+La app abre la biblioteca (o el primer arranque, si aún no hay carpeta elegida). Para la sonda: Ajustes → Diagnóstico.
 
 - `make logs` muestra el logcat de la app. `adb logcat -s Sonda` muestra solo las trazas de Drive y del token: tiempos, bytes, KB/s y esperas por cuota. Nunca aparecen el token, la cabecera `Authorization` ni el correo.
 - `make shot` guarda una captura en `dist/shots/`. Úsalo para fotografiar la hoja de consentimiento.
@@ -93,16 +97,21 @@ Se piden `drive.readonly` y `drive.appdata` en una sola petición, sin client ID
 - Extrae la primera, la del medio, la última y, después, la anterior a la del medio `(hacia atrás)`, con los ms de cada una, los KB, el tamaño en píxeles y **la vía**: `junrar`, `lectura directa (guardada, sin junrar)`, `junrar sólido: N entradas descomprimidas para llegar a ella` o `caché de sólidos (acierto …)`, más los KB comprimidos leídos. Al final, la memoria Java usada antes y después.
 - **«Sólido sintético»**: genera la primera vez (unos segundos; se queda en `cache/sonda/sintetico/`) un RAR4 sólido de 60 páginas JPEG de 1200×1800 y lo abre con el mismo análisis; luego se puede «Leer». Las entradas van guardadas, sin comprimir, porque no hay `rar` con el que comprimir: mide el camino sólido de junrar (salto entre entradas, reinicio hacia atrás) y la caché de sólidos en el almacenamiento de la tablet, **no** la descompresión LZ de un sólido real. Ojo: el fallo latente de junrar con entradas guardadas en sólidos (`docs/INFORME-ARCHIVOS-LOCALES.md`, punto 3) podría salir aquí; si sale, es un dato.
 
-**Qué apuntar (incógnita 3):** los ms de `open` y de cada página en el Helio G100, **con su vía**. En la Mac, una página RAR4 tarda unos 8 ms (p50). Pruébalo con un RAR4 cuya 1.ª página sea comprimida (vía `junrar`), uno guardado (vía `lectura directa`: eso no mide junrar), un RAR5 y un ZIP (usa «Mirar cabeceras» para encontrarlos), y con «Sólido sintético» (la vuelta `(hacia atrás)` debe ser un acierto de caché). Si aparece un RAR sólido de verdad, ese manda. Si hay un PDF entre los candidatos, apunta también lo que tarda una página: se dibuja a 2000 px de ancho en PNG. Un 7z da un error claro a propósito: aún no se lee.
+**Qué apuntar (incógnita 3):** los ms de `open` y de cada página en el Helio G100, **con su vía**. En la Mac, una página RAR4 tarda unos 8 ms (p50). Pruébalo con un RAR4 cuya 1.ª página sea comprimida (vía `junrar`), uno guardado (vía `lectura directa`: eso no mide junrar), un RAR5 y un ZIP (usa «Mirar cabeceras» para encontrarlos), y con «Sólido sintético» (la vuelta `(hacia atrás)` debe ser un acierto de caché). Si aparece un RAR sólido de verdad, ese manda. Si hay un PDF entre los candidatos, apunta también lo que tarda una página: desde el MVP se dibuja a 1440 px de ancho en JPEG de calidad 85 (antes, PNG de 2000 px). Un 7z da un error claro a propósito: aún no se lee.
 
 ### 6. Leer
 
 Primero hay que «Abrir archivo». El interruptor **«Manga RTL»** invierte el sentido y **«Leer»** abre el lector.
 
+Desde el MVP la sonda usa el mismo núcleo que el lector de la app, con ajustes locales que no se guardan:
+
+- Con la tablet en horizontal enseña pliegos dobles: la portada va sola y las páginas apaisadas también.
 - Las páginas pasan con un deslizamiento horizontal. Pellizco y doble toque hacen zoom, hasta 3×.
 - Un toque en el tercio izquierdo o derecho pasa de página al instante, sin animación (en RTL los lados se invierten).
-- Un toque en el tercio central muestra «Pág. X de Y», la barra para saltar y «Cerrar».
-- «Atrás» cierra primero esa capa y después el lector.
+  Si la página desborda, primero la recorre.
+- Un toque en el tercio central abre la superposición: «Pág. X de Y», la barra para saltar, Ajuste, Páginas y «Cerrar».
+- «Atrás» abre la superposición con el aviso «Atrás otra vez para salir del libro». Con ella abierta, sale.
+- Los bordes de la pantalla están excluidos del gesto «atrás» del sistema (UI-4).
 - El lector siempre empieza en la página 1.
 - Mientras está abierto escribe en el registro, con el prefijo `lector:`, cada página asentada, lo que tardó cada extracción (`extraída en N ms (KB), M ms esperando el archivo`), cuándo se dibujó cada página (`dibujada (en pantalla|precargada) N ms después de componerse`) y los errores. Los gestos (pellizco, arrastre en el borde) no dejan traza: se apuntan a mano.
 
@@ -166,18 +175,18 @@ Día 8: «Token silencioso»  →  hace ___ días   ¿SIN pantalla?
 
 - 7z: un `.cbr` de la Mac lo es y da `UnsupportedArchiveException` a propósito (falta libarchive).
 - Los 5xx y los cortes de red de Drive no se reintentan solos: se repite el botón y la descarga sigue desde donde quedó.
-- El lector no recuerda la página. Al cerrar y volver a «Leer» empieza en la 1.
+- El lector de la sonda no recuerda la página. Al cerrar y volver a «Leer» empieza en la 1. El de la app sí la recuerda (`docs/APP.md`).
 - La vía PDF (`PdfRenderer`) y la caché de RAR sólidos solo están probadas en la Mac con ficheros de prueba. La tablet es la primera vez de verdad.
 - Un RAR sólido COMPRIMIDO real: «Sólido sintético» lleva las entradas guardadas, así que no mide la descompresión LZ de un sólido.
 - Los experimentos E2 y E3 de la propuesta v2 (`PROPUESTA-LECTOR-COMICS-v2-DRIVE-2026-10-29.md`, «La fricción real»): el picker con `drive.file` y `allow_folder_selection`, y si `drive.file` ve lo que rclone subió con el cliente Desktop del mismo proyecto. No están en la sonda y no se han descartado: son la vía con scopes no sensibles (sin aviso de app no verificada), a cambio de ver solo una parte de Drive. Pasan a ser urgentes si la hoja nativa no deja pasar el aviso con `drive.readonly` (incógnita 1).
 
 ## Pendientes de la revisión
 
-La revisión de la sonda (30-oct) dejó estos puntos de severidad baja o inciertos. No se tocaron: hay que mirarlos con la tablet o decidir antes del MVP.
+La revisión de la sonda (30-oct) dejó estos puntos de severidad baja o inciertos. ARCH-5 y UI-4 quedan resueltos en el MVP (falta verlos en la tablet); el resto sigue abierto.
 
 - **AD-2 · 416 sin `Content-Range` legible se da por completo** (`drive/DriveRestApi.kt`, rama 416). Si `parseUnsatisfiedTotal` devuelve null se entra en `Done(bytes = 0)` sin prueba. Drive manda `bytes */N` y la conexión es TLS, así que hoy no debería pasar; ahora además la versión se comprueba antes de pedir el rango. Propuesta: tratar `remoteSize == null` como `Restart` y dejar `Done` solo para `remoteSize == offset`.
 - **AD-3 · `forgetDeclinedScopes()` y `forgetAccount()` sin llamador** (`auth/PlayServicesTokenProvider.kt`). Si la hoja ofrece casillas por scope y se desmarca `drive.appdata`, a partir de ahí solo se pide `drive.readonly` en silencio y no hay forma de volver a pedir los dos sin borrar los datos de la app (lo que también reinicia la prueba de los 8 días). Depende de si la hoja nativa ofrece casillas (incógnita 1). Propuesta: botón «Olvidar cuenta y scopes» o que «Conectar Drive» llame a `forgetDeclinedScopes()`; y si `authorize()` falla con cuenta fijada, olvidarla y reintentar una vez.
-- **ARCH-5 · PDF a PNG ARGB de 2000 px** (`archive/PdfComicArchive.kt`). 6-12 MB por página y segundos de codificación estimados; un PDF de 200 páginas podría dejar ~2 GB en `paginas/<id>`. Una tira con proporción > 4 se renderiza aplastada (sin `Matrix`). Lo dicta el contrato («en PDF, un PNG renderizado»): decidir JPEG/WebP y el ancho de pantalla antes del MVP, con los ms y KB que dé «Abrir archivo» con un PDF en la tablet.
-- **UI-4 · El pager no excluye los bordes del gesto de Atrás** (`reader/ReaderScreen.kt`). Con `navigation_mode=2`, un deslizamiento que empiece en el borde es «atrás» y cierra el lector. Depende de cómo trate la SystemUI de TCL el borde en inmersivo: apuntarlo en la incógnita 4. Propuesta: `Modifier.systemGestureExclusion()` en el pager (Android respeta hasta 200 dp por borde).
+- **ARCH-5 · RESUELTO en el MVP:** JPEG de calidad 85 a 1440 px, con `Matrix` y topes que conservan la proporción (16.384 px por lado, 16 Mpx). Falta medir los KB y los ms con un PDF en la tablet. Lo que decía la revisión: **PDF a PNG ARGB de 2000 px** (`archive/PdfComicArchive.kt`). 6-12 MB por página y segundos de codificación estimados; un PDF de 200 páginas podría dejar ~2 GB en `paginas/<id>`. Una tira con proporción > 4 se renderiza aplastada (sin `Matrix`). Lo dicta el contrato («en PDF, un PNG renderizado»): decidir JPEG/WebP y el ancho de pantalla antes del MVP, con los ms y KB que dé «Abrir archivo» con un PDF en la tablet.
+- **UI-4 · RESUELTO en el MVP, en tres capas:** los toques laterales son la vía principal para pasar página; `systemGestureExclusion` en la franja central de 200 dp de cada borde; y un «atrás» abre la superposición, de modo que hacen falta dos para salir. Falta comprobarlo con la SystemUI de TCL en inmersivo. Lo que decía la revisión: **El pager no excluye los bordes del gesto de Atrás** (`reader/ReaderScreen.kt`). Con `navigation_mode=2`, un deslizamiento que empiece en el borde es «atrás» y cierra el lector. Depende de cómo trate la SystemUI de TCL el borde en inmersivo: apuntarlo en la incógnita 4. Propuesta: `Modifier.systemGestureExclusion()` en el pager (Android respeta hasta 200 dp por borde).
 - **Contrato, para cuando se pueda tocar**: `headRevisionId` en `DriveFile` y en `FILE_FIELDS` (hoy solo lo pide la comprobación de versión de `download`, por su cuenta); `RAR5_SOLID` en `ArchiveKind` (hoy un RAR5 sólido sale como `RAR5` y solo el diagnóstico `motor:` dice que es sólido); y si `download` debería recibir el `DriveFile` en vez del id para no pedir la versión otra vez.
 - **Trazas del token**: los ms de `authorize` y de `clearToken` de `PlayServicesTokenProvider` siguen solo en logcat.
