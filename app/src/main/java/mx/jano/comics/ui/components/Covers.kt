@@ -37,6 +37,9 @@ const val COVER_ASPECT = 0.68f
 
 val CoverShape: Shape = RoundedCornerShape(4.dp)
 
+/** Desplazamiento de cada portada de detrás en una pila (hacia arriba y a la derecha). Cabe en el hueco de la rejilla. */
+const val STACK_SHIFT_DP = 4
+
 /** El fichero de portada de un libro, o null mientras llega (o si no hay). */
 @Composable
 fun rememberCoverFile(book: Book?): File? {
@@ -99,19 +102,21 @@ fun BoxScope.TypographicCover(title: String) {
 }
 
 /**
- * Pila de 2-3 portadas desplazadas (las de los primeros libros de la carpeta), la primera delante. Sin libros, una
- * pila de tarjetas tipográficas con el nombre de la carpeta. En alto contraste, sin giro ni sombras.
+ * Pila de 2-3 portadas desplazadas (las de los primeros libros de la carpeta), la primera delante y del tamaño de una
+ * portada de libro (así carpetas y libros quedan alineados en la rejilla); las de detrás asoman hacia arriba a la
+ * derecha, dentro del hueco entre celdas. Sin libros, una pila de tarjetas tipográficas con el nombre de la carpeta.
+ * En alto contraste, sin giro ni sombras.
  */
 @Composable
 fun CoverStack(books: List<Book>, folderName: String, modifier: Modifier = Modifier) {
     val look = LocalComicsLook.current
     val layers = books.take(3)
     val count = if (layers.isEmpty()) 3 else maxOf(layers.size, 2)
-    Box(modifier = modifier.padding(top = 10.dp, end = 10.dp)) {
+    Box(modifier = modifier) {
         for (depth in (count - 1) downTo 0) {
             val book = layers.getOrNull(depth)
-            val shift = (depth * 5).dp
-            val angle = if (look.decorations) depth * 2.5f else 0f
+            val shift = (depth * STACK_SHIFT_DP).dp
+            val angle = if (look.decorations) depth * 1.5f else 0f
             CoverCard(
                 book = book,
                 title = if (depth == 0) folderName else "",

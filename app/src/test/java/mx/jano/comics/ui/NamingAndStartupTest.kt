@@ -1,6 +1,7 @@
 package mx.jano.comics.ui
 
 import mx.jano.comics.library.LibraryIndex
+import mx.jano.comics.ui.nav.Screen
 import mx.jano.comics.ui.settings.SettingsChoices
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -41,6 +42,17 @@ class NamingAndStartupTest {
         assertTrue(Startup.needsRescan(idx("OTRA", now), "R", now))
         assertTrue(Startup.needsRescan(idx("R", now - Startup.RESCAN_AFTER_MS - 1), "R", now))
         assertFalse(Startup.needsRescan(idx("R", now - 60_000), "R", now))
+    }
+
+    @Test fun startupWaitsForAScreenAndRunsOncePerRoot() {
+        val lib = Screen.Library("R")
+        assertFalse(Startup.shouldStart("R", null, null))                  // primer cuadro: pila vacía
+        assertTrue(Startup.shouldStart("R", lib, null))
+        assertFalse(Startup.shouldStart("R", lib, "R"))                    // ya lanzado para esta raíz
+        assertTrue(Startup.shouldStart("R2", lib, "R"))                    // raíz nueva desde Ajustes
+        assertFalse(Startup.shouldStart("R", Screen.Onboarding(), null))   // mientras se conecta o se elige
+        assertFalse(Startup.shouldStart(null, lib, null))
+        assertTrue(Startup.shouldStart("R", Screen.Reader("b"), null))     // restaurado tras morir el proceso
     }
 
     @Test fun settingsChoicesKeepAnUnusualSavedValueVisible() {

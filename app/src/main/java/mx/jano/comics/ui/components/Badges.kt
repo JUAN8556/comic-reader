@@ -113,7 +113,7 @@ fun FolderSummaryLine(mark: FolderMark, summary: String, modifier: Modifier = Mo
     }
 }
 
-/** Estado de un libro en texto («No leído», «Pág. 10 de 36», «Leído» con ✓). */
+/** Estado de un libro en texto («No leído», «Pág. 10 de 36», «Leído» con la marca de visto). */
 @Composable
 fun BookStatusLine(status: BookStatus, modifier: Modifier = Modifier) {
     Row(modifier = modifier, horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {

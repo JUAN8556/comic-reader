@@ -1,5 +1,6 @@
 package mx.jano.comics.ui.library
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
@@ -13,9 +14,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.unit.dp
 import mx.jano.comics.library.ReadState
 import mx.jano.comics.ui.UiStrings
 import mx.jano.comics.ui.components.ComicIcons
+import mx.jano.comics.ui.theme.LocalComicsLook
 
 /** Qué se sabe de un libro o carpeta al abrir su menú. */
 data class MenuFacts(
@@ -41,7 +44,7 @@ class MenuActions(
 /** Menú de la pulsación larga (libro o carpeta entera). Cada opción con icono y texto. */
 @Composable
 fun ItemMenu(expanded: Boolean, onDismiss: () -> Unit, facts: MenuFacts, actions: MenuActions) {
-    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
+    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss, border = menuBorder()) {
         fun pick(action: () -> Unit): () -> Unit = {
             onDismiss()
             action()
@@ -81,6 +84,11 @@ fun ItemMenu(expanded: Boolean, onDismiss: () -> Unit, facts: MenuFacts, actions
         Item(UiStrings.MENU_SERIES, Icons.Filled.Info, pick(actions.openSeries))
     }
 }
+
+/** En alto contraste el menú (negro sobre negro) lleva borde blanco para que se vea dónde acaba. */
+@Composable
+fun menuBorder(): BorderStroke? =
+    if (LocalComicsLook.current.highContrast) BorderStroke(1.dp, MaterialTheme.colorScheme.outline) else null
 
 @Composable
 private fun Item(text: String, icon: ImageVector?, onClick: () -> Unit, enabled: Boolean = true) {

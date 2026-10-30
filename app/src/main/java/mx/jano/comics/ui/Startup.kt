@@ -5,6 +5,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import mx.jano.comics.auth.NeedsConsentException
 import mx.jano.comics.library.LibraryIndex
+import mx.jano.comics.ui.nav.Screen
 
 /**
  * Tareas al abrir la biblioteca de una raíz (una vez por proceso y raíz): token en silencio (si hace falta pantalla,
@@ -14,6 +15,13 @@ import mx.jano.comics.library.LibraryIndex
 object Startup {
     /** Un índice de más de 6 h se refresca solo al arrancar (Drive cambia cuando la migración sube cosas). */
     const val RESCAN_AFTER_MS = 6 * 60 * 60 * 1000L
+
+    /** Hay pantalla (la pila puede estar vacía en el primer cuadro) y no es el primer arranque. */
+    fun ready(top: Screen?): Boolean = top != null && top !is Screen.Onboarding
+
+    /** Las tareas de arranque tocan con raíz elegida, la interfaz lista y si no se lanzaron ya para esa raíz. */
+    fun shouldStart(rootId: String?, top: Screen?, startedFor: String?): Boolean =
+        rootId != null && ready(top) && startedFor != rootId
 
     fun needsRescan(index: LibraryIndex?, rootId: String, now: Long): Boolean =
         index == null || index.rootId != rootId || now - index.scannedAt > RESCAN_AFTER_MS

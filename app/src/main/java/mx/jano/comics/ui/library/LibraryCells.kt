@@ -72,7 +72,7 @@ fun FolderCell(
             CoverStack(
                 books = tile.coverBooks,
                 folderName = tile.folder.name,
-                modifier = Modifier.fillMaxWidth().aspectRatio(COVER_ASPECT * 0.94f),
+                modifier = Modifier.fillMaxWidth().aspectRatio(COVER_ASPECT),
             )
             Spacer(Modifier.height(8.dp))
             Text(

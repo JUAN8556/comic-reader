@@ -464,7 +464,7 @@ private fun RowScope.FilterButton(filter: LibraryFilter, onFilter: (LibraryFilte
     Box {
         val label = if (filter == LibraryFilter.ALL) UiStrings.FILTER else LibraryLogic.filterLabel(filter)
         BarAction(ComicIcons.Filter, label, { open = true }, showLabel = showLabel || filter != LibraryFilter.ALL)
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }, border = menuBorder()) {
             for (f in LibraryFilter.entries) {
                 DropdownMenuItem(
                     text = { Text(LibraryLogic.filterLabel(f)) },

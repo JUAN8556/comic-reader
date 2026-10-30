@@ -130,7 +130,7 @@ fun Banner(
     }
 }
 
-/** Elección única con chips; el elegido lleva ✓ (no solo color). */
+/** Elección única con chips; el elegido lleva la marca de visto (no solo color). */
 @Composable
 fun <T> ChoiceChips(
     options: List<T>,

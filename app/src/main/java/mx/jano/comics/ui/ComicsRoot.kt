@@ -77,9 +77,9 @@ fun ComicsRoot() {
     }
 
     val top = stack.lastOrNull()
-    val onboarding = top is Screen.Onboarding
-    LaunchedEffect(rootId, onboarding) {
-        if (rootId != null && !onboarding && top != null && nav.startedFor != rootId) {
+    val ready = Startup.ready(top)
+    LaunchedEffect(rootId, ready) {
+        if (rootId != null && Startup.shouldStart(rootId, top, nav.startedFor)) {
             nav.startedFor = rootId
             Startup.launch(env, rootId) {
                 nav.startedFor = null

@@ -12,7 +12,7 @@ import mx.jano.comics.ui.UiStrings
 @Serializable
 enum class LibraryFilter { ALL, TO_READ, READING, READ, OFFLINE }
 
-/** Marca agregada de una carpeta: ✓ todo leído, medio círculo en curso, nada sin empezar. */
+/** Marca agregada de una carpeta: visto (Check) todo leído, medio círculo en curso, nada sin empezar. */
 enum class FolderMark { NONE, IN_PROGRESS, ALL_READ }
 
 /** Cuentas de los libros de una carpeta (recursivas). */
