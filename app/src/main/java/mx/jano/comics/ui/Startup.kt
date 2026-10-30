@@ -31,7 +31,9 @@ object Startup {
             } catch (t: Throwable) {
                 Log.i(TAG, "arranque sin token (${t.javaClass.simpleName}): se sigue con el índice local")
             }
-            if (needsRescan(graph.library.index.value, rootId, System.currentTimeMillis()) && graph.transfers.isOnline.value) {
+            val index = graph.library.index.value
+            val usable = index != null && index.rootId == rootId
+            if (needsRescan(index, rootId, System.currentTimeMillis()) && (!usable || graph.transfers.isOnline.value)) {
                 quietly("escaneo") { graph.library.rescan() }
                 env.covers.forgetFailures()
             }

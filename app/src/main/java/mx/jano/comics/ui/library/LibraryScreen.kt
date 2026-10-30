@@ -111,12 +111,12 @@ fun LibraryScreen(folderId: String, nav: Navigator) {
     val isRoot = folderId == rootId
 
     val bookByKey = remember(index) { index?.books?.associateBy { it.contentKey }.orEmpty() }
-    val content by produceState<FolderContent?>(null, index, folderId, progress, filter, pins, cacheState) {
+    val content by produceState(env.folderContents[folderId], index, folderId, isRoot, progress, filter, pins, cacheState) {
         val idx = index
         value = if (idx == null) {
             null
         } else {
-            withContext(Dispatchers.Default) {
+            val built = withContext(Dispatchers.Default) {
                 LibraryContentBuilder.build(
                     library = graph.library,
                     folderId = folderId,
@@ -129,6 +129,8 @@ fun LibraryScreen(folderId: String, nav: Navigator) {
                     bookByKey = bookByKey::get,
                 )
             }
+            env.folderContents[folderId] = built
+            built
         }
     }
 
@@ -431,7 +433,8 @@ private fun LibraryTopBar(
 @Composable
 private fun Breadcrumbs(crumbs: List<Folder>, rootName: String, onCrumb: (String) -> Unit, modifier: Modifier = Modifier) {
     val scroll = rememberScrollState()
-    LaunchedEffect(crumbs.size) { scroll.scrollTo(scroll.maxValue) }
+    val max = scroll.maxValue
+    LaunchedEffect(crumbs.size, max) { scroll.scrollTo(max) }
     Row(modifier = modifier.horizontalScroll(scroll), verticalAlignment = Alignment.CenterVertically) {
         if (crumbs.isEmpty()) {
             Text(rootName, style = MaterialTheme.typography.titleLarge, maxLines = 1)

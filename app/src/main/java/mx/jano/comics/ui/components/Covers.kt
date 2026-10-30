@@ -11,8 +11,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.produceState
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -40,10 +41,12 @@ val CoverShape: Shape = RoundedCornerShape(4.dp)
 @Composable
 fun rememberCoverFile(book: Book?): File? {
     val loader = LocalUiEnv.current.covers
-    val file by produceState<File?>(initialValue = null, book?.contentKey) {
-        value = book?.let { loader.load(it) }
+    val key = book?.contentKey
+    val state = remember(key) { mutableStateOf(book?.let(loader::peek)) }
+    LaunchedEffect(key) {
+        if (state.value == null && book != null) state.value = loader.load(book)
     }
-    return file
+    return state.value
 }
 
 /**

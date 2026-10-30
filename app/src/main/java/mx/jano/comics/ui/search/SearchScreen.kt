@@ -79,11 +79,12 @@ fun SearchScreen(nav: Navigator) {
         val idx = index ?: return@produceState
         value = withContext(Dispatchers.Default) { SearchCorpus(idx) }
     }
-    val results by produceState(SearchResults.EMPTY, corpus, query) {
+    val computed by produceState(SearchResults.EMPTY, corpus, query) {
         val c = corpus ?: return@produceState
         delay(120)
         value = withContext(Dispatchers.Default) { SearchLogic.search(c, query, UiNaming.natural) }
     }
+    val results = if (query.isBlank()) SearchResults.EMPTY else computed
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
     val bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()

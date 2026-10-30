@@ -4,6 +4,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import kotlinx.coroutines.CoroutineScope
 import mx.jano.comics.AppGraph
 import mx.jano.comics.ui.components.CoverLoader
+import mx.jano.comics.ui.library.FolderContent
 import mx.jano.comics.ui.theme.InkModeSource
 
 /** El grafo de la app para las pantallas. Lo pone MainActivity con el de ComicsApp; las vistas previas, uno falso. */
@@ -20,6 +21,14 @@ class UiEnv(
 ) {
     val actions: UiActions = UiActions(graph, scope, prefs)
     val covers: CoverLoader = CoverLoader(graph.covers)
+
+    /**
+     * Último contenido calculado de cada carpeta (solo en el hilo principal): al volver atrás la rejilla se pinta al
+     * instante con él mientras se recalcula. Pocas entradas, las menos usadas fuera.
+     */
+    val folderContents: MutableMap<String, FolderContent> = object : LinkedHashMap<String, FolderContent>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, FolderContent>?): Boolean = size > 32
+    }
 }
 
 val LocalUiEnv = staticCompositionLocalOf<UiEnv> { error("Falta LocalUiEnv") }

@@ -40,7 +40,8 @@ class UiPrefsStore(private val file: File?) {
         mutex.withLock {
             val next = transform(_state.value)
             if (next == _state.value) return
-            withContext(Dispatchers.IO) { write(next) }
+            val f = file
+            if (f != null) withContext(Dispatchers.IO) { write(f, next) }
             _state.value = next
         }
     }
@@ -54,8 +55,7 @@ class UiPrefsStore(private val file: File?) {
         }
     }
 
-    private fun write(prefs: UiPrefs) {
-        val f = file ?: return
+    private fun write(f: File, prefs: UiPrefs) {
         f.parentFile?.mkdirs()
         val tmp = File(f.parentFile, f.name + ".tmp")
         FileOutputStream(tmp).use { out ->
