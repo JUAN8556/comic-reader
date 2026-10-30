@@ -163,10 +163,11 @@ class PinJobService : JobService() {
     }
 
     /**
-     * JobService.getTransferredDownloadBytes(JobParameters) es @hide en el SDK pero el sistema la llama en los
-     * trabajos de transferencia (UIDT con bytes estimados) si no se le informa a menudo; la base lanza
-     * «Not implemented» a partir de targetSdk 34. Misma firma JVM: la sobrescribe en tiempo de ejecución.
-     * @Keep para que R8 no la quite ni la renombre (no ve el método del padre).
+     * JobService.getTransferredDownloadBytes(JobParameters) es @hide en el SDK; está pensada para que el sistema
+     * pregunte el progreso de un trabajo de transferencia si no se le informa a menudo, y la base lanza
+     * «Not implemented» con targetSdk > 33. En Android 15 el sistema aún no la llama (TODO 255371817 en AOSP) y
+     * aquí se informa cada segundo con updateTransferredNetworkBytes; por si una versión futura la llama, la misma
+     * firma JVM la sobrescribe. @Keep para que R8 no la quite ni la renombre (no ve el método del padre).
      */
     @Keep
     fun getTransferredDownloadBytes(params: JobParameters): Long = transferred

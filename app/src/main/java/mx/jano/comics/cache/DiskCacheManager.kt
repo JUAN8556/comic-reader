@@ -149,6 +149,9 @@ class DiskCacheManager(
     /** Espera a que termine la conciliación del arranque. */
     suspend fun awaitReady() = ready.await()
 
+    /** Vuelve a medir el espacio libre del volumen (p. ej. al abrir Ajustes); el resto del estado ya va en vivo. */
+    fun refresh() = publishState()
+
     // --- Consultas (sin esperar, sin disco salvo localFile) ---
 
     override fun availability(book: Book): Availability {
