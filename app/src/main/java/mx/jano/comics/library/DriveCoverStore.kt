@@ -43,7 +43,8 @@ internal fun interface CoverEncoder {
  * 3. La imagen se reduce con [encoder] (WebP ~300 px; si ya es pequeña se guarda tal cual).
  *
  * Nunca más de [MAX_PARALLEL] portadas remotas a la vez; dos peticiones de la misma portada esperan al mismo
- * trabajo; un fallo se recuerda [RETRY_AFTER_MS] para no repetirlo en cada desplazamiento de la rejilla.
+ * trabajo; un fallo se recuerda para no repetirlo en cada desplazamiento de la rejilla: [RETRY_AFTER_MS] si el
+ * archivo no da portada por prefijo, [RETRY_AFTER_ERROR_MS] si fue la red o Drive.
  */
 class DriveCoverStore internal constructor(
     private val coversDir: File,
@@ -57,7 +58,8 @@ class DriveCoverStore internal constructor(
 
     private val gate = Semaphore(MAX_PARALLEL)
     private val inFlight = ConcurrentHashMap<String, CompletableDeferred<File?>>()
-    private val failedAt = ConcurrentHashMap<String, Long>()
+    /** Clave → cuándo se puede volver a intentar (tras un fallo). */
+    private val retryAt = ConcurrentHashMap<String, Long>()
     private val importMutex = Mutex()
 
     override fun coverFile(book: Book): File? = fileFor(book).takeIf { it.isFile && it.length() > 0 }
@@ -65,20 +67,23 @@ class DriveCoverStore internal constructor(
     override suspend fun ensureCover(book: Book): File? {
         coverFile(book)?.let { return it }
         val key = keyOf(book)
-        failedAt[key]?.let { if (clock() - it < RETRY_AFTER_MS) return null }
+        retryAt[key]?.let { if (clock() < it) return null }
         val mine = CompletableDeferred<File?>()
         val existing = inFlight.putIfAbsent(key, mine)
         if (existing != null) return existing.await()
         try {
+            var retryIn = RETRY_AFTER_MS
             val result = try {
                 gate.withPermit { withContext(Dispatchers.IO) { coverFile(book) ?: fetchRemote(book) } }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                // Red, cuota, permiso: se reintenta pronto. «No se puede por prefijo» (null sin error): mucho después.
                 log("portada «${book.name}»: ${e::class.java.simpleName}: ${e.message}")
+                retryIn = RETRY_AFTER_ERROR_MS
                 null
             }
-            if (result == null) failedAt[key] = clock() else failedAt.remove(key)
+            if (result == null) retryAt[key] = clock() + retryIn else retryAt.remove(key)
             mine.complete(result)
             return result
         } catch (e: CancellationException) {
@@ -186,7 +191,7 @@ class DriveCoverStore internal constructor(
         val zip = File(workDir, IndiceSync.PORTADAS)
         workDir.mkdirs()
         try {
-            sync.download(remote, zip)
+            sync.download(remote, zip, resumable = true)
             val count = withContext(Dispatchers.IO) { extractCovers(zip, byCoverName) }
             AtomicFiles.writeText(
                 stateFile,
@@ -243,6 +248,7 @@ class DriveCoverStore internal constructor(
         const val MAX_PARALLEL = 3
         const val HEAD_BYTES = 1024
         const val RETRY_AFTER_MS = 30L * 60 * 1000
+        const val RETRY_AFTER_ERROR_MS = 60L * 1000
         const val IMPORT_STATE = ".importado.json"
         const val PDF_COVER_WIDTH = 600
         val RAR_PREFIX_STEPS = listOf(1 shl 20, 2 shl 20, 4 shl 20, 8 shl 20)

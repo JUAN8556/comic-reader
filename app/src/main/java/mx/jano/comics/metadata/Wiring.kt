@@ -15,6 +15,18 @@ internal object MetadataWiring {
 
     val log: (String) -> Unit = { android.util.Log.i("Metadatos", it) }
 
+    @Volatile private var repository: DriveMetadataRepository? = null
+
+    fun repository(context: Context, drive: DriveApi, library: LibraryRepository): DriveMetadataRepository =
+        repository ?: synchronized(this) {
+            repository ?: DriveMetadataRepository(
+                dir = File(context.applicationContext.filesDir, "indice"),
+                sync = indiceSync(context, drive, library),
+                scope = scope,
+                log = log,
+            ).also { repository = it }
+        }
+
     @Volatile private var sync: IndiceSync? = null
 
     /**

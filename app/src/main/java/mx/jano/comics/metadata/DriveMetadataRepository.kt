@@ -51,6 +51,8 @@ class DriveMetadataRepository internal constructor(
 
     @Volatile private var data: MetadataData = MetadataData.EMPTY
     @Volatile private var loadedFlag = false
+    /** Huella (tamaño y fecha) de los ficheros de disco que se cargaron: si otro los bajó (las portadas), se recarga. */
+    @Volatile private var loadedStamp: String = ""
     private val mutex = Mutex()
     private val initialLoad: Job = scope.launch(Dispatchers.IO) { mutex.withLock { loadFromDisk() } }
 
@@ -74,7 +76,8 @@ class DriveMetadataRepository internal constructor(
                 val changed = sync.sync(setOf(IndiceSync.INDICE, IndiceSync.SERIES, IndiceSync.TAXONOMIA))
                 when {
                     changed == null -> log("metadatos: no hay .indice en Drive")
-                    changed.isNotEmpty() || !loadedFlag -> withContext(Dispatchers.IO) { loadFromDisk() }
+                    changed.isNotEmpty() || !loadedFlag || diskStamp() != loadedStamp ->
+                        withContext(Dispatchers.IO) { loadFromDisk() }
                 }
             }
             Result.success(Unit)
@@ -121,7 +124,11 @@ class DriveMetadataRepository internal constructor(
         return (1..total).filter { it !in present }
     }
 
+    private fun diskStamp(): String = listOf(IndiceSync.INDICE, IndiceSync.SERIES, IndiceSync.TAXONOMIA)
+        .joinToString("|") { name -> sync.local(name)?.let { "${it.length()}@${it.lastModified()}" } ?: "-" }
+
     private fun loadFromDisk() {
+        loadedStamp = diskStamp()
         val indice = sync.local(IndiceSync.INDICE)
         val series = sync.local(IndiceSync.SERIES)
         val taxonomy = sync.local(IndiceSync.TAXONOMIA)

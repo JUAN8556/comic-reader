@@ -249,6 +249,20 @@ class LibraryRepositoryTest {
         assertEquals(8, repo.index.value!!.books.size)
     }
 
+    @Test fun raiz_vacia_de_golpe_no_borra_la_biblioteca() = runBlocking {
+        val drive = sampleDrive()
+        val repo = repo(drive)
+        repo.rescan()
+        drive.children.clear()
+        val e = runCatching { repo.rescan() }.exceptionOrNull()
+        assertTrue("$e", e is EmptyRootException)
+        assertEquals(ScanState.Error(LibraryStrings.ROOT_EMPTY), repo.scanState.value)
+        assertEquals(8, repo.index.value!!.books.size)
+        // Una raíz vacía desde el principio sí vale (biblioteca nueva).
+        val fresh = repo(FakeDrive(), File(tmp.root, "nuevo.json"))
+        assertEquals(0, fresh.rescan().books.size)
+    }
+
     @Test fun dos_rescan_a_la_vez_comparten_el_escaneo() = runBlocking {
         val drive = sampleDrive()
         drive.gate = CompletableDeferred()

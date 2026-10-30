@@ -65,10 +65,5 @@ interface MetadataRepository {
 object MetadataFactories {
     /** Una instancia por proceso. La raíz sale del índice de [library] o, si aún no hay, de los ajustes. */
     fun repository(context: Context, drive: DriveApi, library: LibraryRepository): MetadataRepository =
-        DriveMetadataRepository(
-            dir = java.io.File(context.filesDir, "indice"),
-            sync = MetadataWiring.indiceSync(context, drive, library),
-            scope = MetadataWiring.scope,
-            log = MetadataWiring.log,
-        )
+        MetadataWiring.repository(context, drive, library)
 }

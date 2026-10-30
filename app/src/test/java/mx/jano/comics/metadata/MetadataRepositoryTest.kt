@@ -170,6 +170,20 @@ class MetadataRepositoryTest {
         assertNotNull(r.entryFor(book("Manga/Naruto/Naruto - Tomo 6.cbr")))
     }
 
+    @Test fun recarga_si_otro_bajo_el_indice() = runBlocking {
+        val drive = FakeDrive().apply { files["indice.jsonl"] = "m1" to """{"ruta":"a/1.cbr","numero":"1"}""" }
+        val dir = File(tmp.root, "files/indice")
+        val r = repo(drive)
+        r.refreshFromDrive().getOrThrow()
+        assertEquals("1", r.entryFor(book("a/1.cbr"))?.numero)
+        // Las portadas (otro IndiceSync sobre la misma carpeta) bajan un indice.jsonl nuevo.
+        drive.files["indice.jsonl"] = "m2" to """{"ruta":"a/1.cbr","numero":"uno-bis"}""" + "\n" + """{"ruta":"a/2.cbr"}"""
+        IndiceSync(dir, drive, rootId = { "ROOT" }).sync(setOf(IndiceSync.INDICE))
+        r.refreshFromDrive().getOrThrow()
+        assertEquals("uno-bis", r.entryFor(book("a/1.cbr"))?.numero)
+        assertNotNull(r.entryFor(book("a/2.cbr")))
+    }
+
     @Test fun numeros_que_faltan() = runBlocking {
         val drive = FakeDrive().apply {
             files["indice.jsonl"] = "m1" to indice

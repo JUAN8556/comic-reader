@@ -89,20 +89,28 @@ internal class IndiceSync(
 
     fun local(name: String): File? = File(dir, name).takeIf { it.isFile && it.length() > 0 }
 
-    /** Baja [file] a [dest] pasando por un temporal (quien lea [dest] nunca ve uno a medias). */
-    suspend fun download(file: DriveFile, dest: File) {
+    /**
+     * Baja [file] a [dest] pasando por un temporal (quien lea [dest] nunca ve uno a medias). Con [resumable], si se
+     * corta, el temporal se queda y la siguiente vez se sigue con `Range` (el cliente comprueba que sea la misma
+     * versión): para portadas.zip, que son cientos de MB.
+     */
+    suspend fun download(file: DriveFile, dest: File, resumable: Boolean = false) {
         dest.absoluteFile.parentFile?.mkdirs()
         val tmp = File(dest.path + ".part")
+        var done = false
         try {
-            drive.download(file.id, tmp, resume = false)
+            drive.download(file.id, tmp, resume = resumable)
             if (!tmp.renameTo(dest)) {
                 dest.delete()
                 if (!tmp.renameTo(dest)) throw IOException("No se pudo renombrar ${tmp.name}")
             }
+            done = true
             log("índice: bajado ${dest.name} (${dest.length()} bytes)")
         } finally {
-            tmp.delete()
-            DriveRestApi.partialVersionFile(tmp).delete()
+            if (done || !resumable) {
+                tmp.delete()
+                DriveRestApi.partialVersionFile(tmp).delete()
+            }
         }
     }
 

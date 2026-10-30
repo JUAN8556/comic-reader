@@ -130,6 +130,14 @@ class DriveLibraryRepository internal constructor(
             val scanned = LevelScanner(lister, log).scan(root) { folders, books ->
                 stateFlow.value = ScanState.Scanning(folders, books)
             }
+            // Una raíz que de golpe sale vacía (carpeta movida a la papelera, permiso retirado, respuesta rara) no
+            // borra una biblioteca que tenía libros: se conserva la anterior y se avisa.
+            val previous = indexFlow.value
+            if (scanned.books.isEmpty() && scanned.folders.size <= 1 && previous != null &&
+                previous.rootId == root.id && previous.books.isNotEmpty()
+            ) {
+                throw EmptyRootException(LibraryStrings.ROOT_EMPTY)
+            }
             val index = scanned.copy(scannedAt = clock())
             publish(index)
             withContext(Dispatchers.IO) {
@@ -155,6 +163,7 @@ class DriveLibraryRepository internal constructor(
 
     private fun describe(e: Exception): String = when (e) {
         is RootMissingException -> e.message ?: LibraryStrings.NO_ROOT
+        is EmptyRootException -> e.message ?: LibraryStrings.ROOT_EMPTY
         is NeedsConsentException -> LibraryStrings.NEEDS_CONSENT
         is DriveHttpException -> LibraryStrings.driveError(e.message)
         is java.net.UnknownHostException, is java.net.SocketTimeoutException, is java.net.ConnectException -> LibraryStrings.OFFLINE
@@ -220,6 +229,9 @@ class DriveLibraryRepository internal constructor(
 
 /** No hay carpeta raíz configurada ni se encontró «Cómics». */
 internal class RootMissingException(message: String) : IllegalStateException(message)
+
+/** La raíz salió vacía y antes tenía libros: no se sustituye el índice. */
+internal class EmptyRootException(message: String) : IllegalStateException(message)
 
 /** Orden natural de rutas segmento a segmento («Serie/01» antes que «Serie 2/01»). */
 internal object PathOrder : Comparator<String> {

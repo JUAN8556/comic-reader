@@ -178,9 +178,21 @@ class CoverStoreTest {
         assertEquals(after, ranges.reads.size)
     }
 
-    @Test fun error_de_red_da_null_sin_excepcion() = runBlocking {
-        val s = store(FakeRanges())
-        assertNull(s.ensureCover(book("noexiste", ByteArray(10_000))))
+    @Test fun error_de_red_da_null_sin_excepcion_y_se_reintenta_pronto() = runBlocking {
+        var now = 0L
+        val zip = zipOf("1.jpg" to page(1, 100))
+        val ranges = FakeRanges()
+        val s = DriveCoverStore(
+            coversDir = File(tmp.root, "files/covers"), workDir = File(tmp.root, "cache/portadas"),
+            ranges = ranges, indice = null, encoder = copyEncoder, clock = { now },
+        )
+        val b = book("tarde", zip)
+        assertNull(s.ensureCover(b))                 // 404/sin red: IOException → null
+        ranges.files[b.id] = zip                     // vuelve la red
+        now += 30_000
+        assertNull(s.ensureCover(b))                 // aún dentro del minuto: ni lo intenta
+        now += DriveCoverStore.RETRY_AFTER_ERROR_MS
+        assertNotNull(s.ensureCover(b))
     }
 
     @Test fun nunca_mas_de_tres_a_la_vez_y_la_misma_una_sola_vez() = runBlocking {
@@ -282,6 +294,38 @@ class CoverStoreTest {
         val s2 = store(null, IndiceSync(File(tmp.root, "files/indice"), d2, rootId = { "ROOT" }))
         assertEquals(3, s2.importIndexCovers())
         assertEquals(listOf("P"), d2.downloads)
+    }
+
+    @Test fun portadas_zip_cortado_se_reanuda() = runBlocking {
+        val md5a = "a".repeat(32)
+        val portadas = zipOf("$md5a.webp" to "A".toByteArray())
+        val folder = DriveFile("IDX", ".indice", "application/vnd.google-apps.folder")
+        val resumes = mutableListOf<Pair<Boolean, Long>>()
+        var fail = true
+        val drive = object : DriveApi {
+            override suspend fun findFolder(name: String, parentId: String): DriveFile? = null
+            override suspend fun listChildren(folderId: String) = when (folderId) {
+                "ROOT" -> listOf(folder)
+                "IDX" -> listOf(DriveFile("P", "portadas.zip", "application/zip", portadas.size.toLong(), "v1"))
+                else -> emptyList()
+            }
+            override suspend fun download(fileId: String, dest: File, resume: Boolean, onProgress: (Long, Long?) -> Unit) {
+                resumes += resume to (if (dest.isFile) dest.length() else 0L)
+                if (fail) {
+                    fail = false
+                    dest.writeBytes(portadas.copyOf(portadas.size / 2))
+                    throw java.io.IOException("se cortó la Wi-Fi")
+                }
+                dest.appendBytes(portadas.copyOfRange(dest.length().toInt(), portadas.size))
+            }
+            override suspend fun about() = DriveAbout()
+        }
+        val s = store(null, IndiceSync(File(tmp.root, "files/indice"), drive, rootId = { "ROOT" }))
+        assertTrue(runCatching { s.importIndexCovers() }.isFailure)
+        assertEquals(1, s.importIndexCovers())
+        assertEquals(listOf(true to 0L, true to (portadas.size / 2).toLong()), resumes)
+        assertEquals("A", File(tmp.root, "files/covers/$md5a.webp").readText())
+        assertTrue(File(tmp.root, "cache/portadas").listFiles().orEmpty().none { it.name.startsWith("portadas.zip") })
     }
 
     @Test fun sin_indice_en_drive_importa_cero() = runBlocking {

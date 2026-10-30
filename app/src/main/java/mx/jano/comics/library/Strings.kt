@@ -9,6 +9,7 @@ internal object LibraryStrings {
     const val OFFLINE = "Sin conexión: no se pudo leer Google Drive. Se sigue enseñando la última biblioteca."
     fun driveError(detail: String?) = "Google Drive no respondió como se esperaba" + (detail?.let { ": $it" } ?: ".")
     fun scanFailed(detail: String?) = "No se pudo leer la biblioteca" + (detail?.let { ": $it" } ?: ".")
+    const val ROOT_EMPTY = "La carpeta de tus cómics aparece vacía en Google Drive; se sigue enseñando la biblioteca anterior."
     const val TOO_DEEP = "La carpeta tiene demasiados niveles de subcarpetas; se ha leído hasta el nivel 64."
 
     const val NO_APPDATA = "La copia en Drive no está disponible con este cliente de Drive."

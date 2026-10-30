@@ -19,15 +19,20 @@ internal object LibraryWiring {
 
     private val log: (String) -> Unit = { android.util.Log.i("Biblioteca", it) }
 
+    @Volatile private var repository: DriveLibraryRepository? = null
+
+    /** Una por proceso (files/index.json y un solo escaneo a la vez); la primera llamada fija Drive y ajustes. */
     fun repository(context: Context, drive: DriveApi, settings: SettingsStore): DriveLibraryRepository =
-        DriveLibraryRepository(
-            indexFile = File(context.applicationContext.filesDir, "index.json"),
-            lister = DriveAccess.listerFor(drive),
-            resolveRoot = { resolveRoot(drive, settings) },
-            configuredRootId = { settings.app.value.rootFolderId },
-            scope = scope,
-            log = log,
-        )
+        repository ?: synchronized(this) {
+            repository ?: DriveLibraryRepository(
+                indexFile = File(context.applicationContext.filesDir, "index.json"),
+                lister = DriveAccess.listerFor(drive),
+                resolveRoot = { resolveRoot(drive, settings) },
+                configuredRootId = { settings.app.value.rootFolderId },
+                scope = scope,
+                log = log,
+            ).also { repository = it }
+        }
 
     /**
      * La raíz de los ajustes; si no hay ninguna elegida, busca «Cómics» (o el nombre guardado) en «Mi unidad», en NFC y
@@ -58,17 +63,23 @@ internal object LibraryWiring {
             ).also { progress = it }
         }
 
-    fun coverStore(context: Context, drive: DriveApi, library: LibraryRepository): DriveCoverStore {
-        val app = context.applicationContext
-        return DriveCoverStore(
-            coversDir = File(app.filesDir, "covers"),
-            workDir = File(app.cacheDir, "portadas"),
-            ranges = DriveAccess.rangeReaderFor(drive),
-            indice = MetadataWiring.indiceSync(app, drive, library),
-            encoder = BitmapCoverEncoder(),
-            log = log,
-        )
-    }
+    @Volatile private var covers: DriveCoverStore? = null
+
+    /** Uno por proceso: el tope de 3 portadas a la vez y la espera compartida valen para toda la app. */
+    fun coverStore(context: Context, drive: DriveApi, library: LibraryRepository): DriveCoverStore =
+        covers ?: synchronized(this) {
+            covers ?: run {
+                val app = context.applicationContext
+                DriveCoverStore(
+                    coversDir = File(app.filesDir, "covers"),
+                    workDir = File(app.cacheDir, "portadas"),
+                    ranges = DriveAccess.rangeReaderFor(drive),
+                    indice = MetadataWiring.indiceSync(app, drive, library),
+                    encoder = BitmapCoverEncoder(),
+                    log = log,
+                ).also { covers = it }
+            }
+        }
 
     fun appDataFor(drive: DriveApi): AppDataStore? = AppDataStores.from(drive)
 }
