@@ -12,5 +12,5 @@ interface AppDataStore {
 
 /** Lo rellena el frente «data» (REST: files?spaces=appDataFolder, files.create/update uploadType=media). */
 object AppDataStores {
-    fun rest(tokens: TokenProvider): AppDataStore = TODO("mvp/data")
+    fun rest(tokens: TokenProvider): AppDataStore = AppDataRestStore(DriveRestApi(tokens, log = SondaLog::i), log = SondaLog::i)
 }

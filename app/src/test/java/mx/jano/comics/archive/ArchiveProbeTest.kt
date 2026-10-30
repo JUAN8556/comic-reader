@@ -59,7 +59,7 @@ class ArchiveProbeTest {
         )
         assertTrue(ArchiveProbeFormat.via(ArchiveKind.RAR4_SOLID, true, zero, zero).startsWith("caché de sólidos (acierto"))
         assertEquals("java.util.zip", ArchiveProbeFormat.via(ArchiveKind.ZIP, null, zero, zero))
-        assertEquals("PdfRenderer → PNG", ArchiveProbeFormat.via(ArchiveKind.PDF, null, zero, zero))
+        assertEquals("PdfRenderer → JPEG", ArchiveProbeFormat.via(ArchiveKind.PDF, null, zero, zero))
     }
 
     @Test fun metodos() {

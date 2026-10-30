@@ -43,7 +43,7 @@ fun ComicArchive.engineDiagnostics(): String = when (this) {
     }
     is ZipComicArchive -> "java.util.zip · nombres en ${charset.name()} · método de la 1.ª página " +
         ArchiveProbeFormat.zipMethod(firstPageMethod)
-    is PdfComicArchive -> "PdfRenderer de la plataforma · cada página a PNG de $targetWidthPx px de ancho"
+    is PdfComicArchive -> "PdfRenderer de la plataforma · cada página a JPEG de $targetWidthPx px de ancho"
     else -> kind.name
 }
 
@@ -136,7 +136,7 @@ internal object ArchiveProbeFormat {
     }
 
     fun via(kind: ArchiveKind, solid: Boolean?, before: ExtractionCounters, after: ExtractionCounters): String = when (kind) {
-        ArchiveKind.PDF -> "PdfRenderer → PNG"
+        ArchiveKind.PDF -> "PdfRenderer → JPEG"
         ArchiveKind.ZIP -> "java.util.zip"
         ArchiveKind.RAR4, ArchiveKind.RAR4_SOLID, ArchiveKind.RAR5 -> when {
             after.directReads > before.directReads -> "lectura directa (guardada, sin junrar)"

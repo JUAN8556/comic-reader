@@ -15,7 +15,8 @@ internal const val COPY_BUFFER = 64 * 1024
 /**
  * Ajustes de apertura. [ComicArchives.open] (el del contrato) usa los de por defecto.
  *
- * @property pdfTargetWidthPx ancho del PNG al que se renderiza cada página de un PDF.
+ * @property pdfTargetWidthPx ancho al que se renderiza cada página vertical de un PDF (a JPEG; el ancho de la tablet
+ *   en vertical, 1440 px; ver [PdfPageGeometry] para las apaisadas y las tiras altas).
  * @property solidStagingParent dónde dejar la caché de un RAR sólido; `null` = junto al `dest` de la primera página
  *   pedida, en una carpeta oculta `.solid-<huella>` que se borra al cerrar.
  * @property maxRarDictionaryBytes diccionario RAR máximo que se acepta; `null` = la mitad del heap de la app
@@ -25,7 +26,7 @@ internal const val COPY_BUFFER = 64 * 1024
  *   solo se apaga en pruebas, para ejercitar también el camino de junrar.
  */
 data class OpenOptions(
-    val pdfTargetWidthPx: Int = 2000,
+    val pdfTargetWidthPx: Int = PdfComicArchive.DEFAULT_TARGET_WIDTH,
     val solidStagingParent: File? = null,
     val maxRarDictionaryBytes: Long? = null,
     internal val directStoredReads: Boolean = true,
