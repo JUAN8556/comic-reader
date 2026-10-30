@@ -11,7 +11,8 @@ KEYSTORE_SVC  := comics-keystore
 export COMICS_KEYSTORE_PASS = $(shell security find-generic-password -s $(KEYSTORE_SVC) -a comics -w 2>/dev/null)
 TOOLKIT       := $(HOME)/nxtpaper-toolkit
 DEVICE_CONF   := $(TOOLKIT)/config/device.conf
-SERIAL         = $(shell sed -n 's/^DEVICE_SERIAL="\(.*\)"/\1/p' $(DEVICE_CONF) 2>/dev/null)
+# la tablet se anuncia por mDNS y adb la conecta sola; el puerto cambia, así que el serial se lee de adb, no de un fichero
+SERIAL         = $(shell adb devices 2>/dev/null | sed -n '2p' | cut -f1)
 ADB            = ANDROID_SERIAL=$(SERIAL) adb
 
 .PHONY: help setup doctor keystore sha1 connect dev deploy run logs shot test clean
