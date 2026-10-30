@@ -119,7 +119,7 @@ class SondaViewModel(app: Application) : AndroidViewModel(app) {
                 return@launch
             }
             val value = DeviceProbe.readSettingDescribed(ctx.contentResolver, table, key)
-            val mark = if (ProbeFormat.looksLikeInkSetting(key)) "  [ink/paper/tct/nxt]" else ""
+            val mark = if (ProbeFormat.looksLikeInkSetting(key)) "  [modo de papel]" else ""
             log.line("ajuste cambiado: $table/$key = $value$mark")
         }
     }

@@ -44,7 +44,13 @@ class ProbeFormatTest {
         assertTrue(ProbeFormat.looksLikeInkSetting("tct_ink_mode_enable"))
         assertTrue(ProbeFormat.looksLikeInkSetting("NXTPAPER_mode"))
         assertTrue(ProbeFormat.looksLikeInkSetting("color_paper_mode"))
+        assertTrue(ProbeFormat.looksLikeInkSetting("nxtpaper_ink_style_state"))
+        assertTrue(ProbeFormat.looksLikeInkSetting("adv_color_mode_value"))
+        assertTrue(ProbeFormat.looksLikeInkSetting("eyeprotect_status"))
+        assertTrue(ProbeFormat.looksLikeInkSetting("reading_mode_be_on"))
+        assertTrue(ProbeFormat.looksLikeInkSetting("installed_theme"))
         assertFalse(ProbeFormat.looksLikeInkSetting("screen_brightness"))
+        assertFalse(ProbeFormat.looksLikeInkSetting("font_scale"))
     }
 
     @Test

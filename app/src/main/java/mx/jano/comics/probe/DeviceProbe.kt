@@ -24,7 +24,28 @@ import com.google.android.gms.common.GoogleApiAvailability
 internal object DeviceProbe {
     val TABLES = listOf("system", "secure", "global")
 
-    /** Claves candidatas al modo NXTPAPER (Color Paper / Ink Paper); ninguna es pública. */
+    /**
+     * Claves del modo NXTPAPER que adb SÍ vio en la tablet (docs/DISPOSITIVO-2026-10-29.md), cada una en su tabla.
+     * La pregunta de la sonda es si una app normal las lee (sobre todo Settings.Secure) y qué valor toma
+     * `nxtpaper_ink_style_state` en Normal / Color Paper / Ink Paper.
+     */
+    val KNOWN_KEYS = listOf(
+        "secure" to "nxtpaper_ink_style_state",
+        "secure" to "nxtpaper_style_before_apply_theme",
+        "secure" to "nxtpaper_style_switch_count",
+        "secure" to "installed_theme",
+        "secure" to "reading_mode_be_on",
+        "secure" to "reading_mode_display_screen",
+        "secure" to "tct_color_temperature_activated",
+        "system" to "color_mode_value",
+        "system" to "adv_color_mode_value",
+        "system" to "eyeprotect_kind",
+        "system" to "eyeprotect_status",
+        "system" to "nxtpaper_key_light_switches",
+        "system" to "aikey_settings_single_press",
+    )
+
+    /** Candidatas que suponía la investigación (adb dice que no existen); se leen para confirmarlo desde la app. */
     val INK_KEYS = listOf(
         "tct_ink_mode_enable", "tct_ink_mode_type", "tct_ink_mode",
         "nxtpaper_mode", "ink_paper_mode", "color_paper_mode", "paper_mode", "eink_mode",
@@ -80,7 +101,11 @@ internal object DeviceProbe {
             "animator_duration_scale: ${readSettingDescribed(cr, "global", Settings.Global.ANIMATOR_DURATION_SCALE)}"
         }
 
-        log.line("NXTPAPER: claves candidatas en System, Secure y Global")
+        log.line("NXTPAPER: claves que adb vio el 29-oct, leídas desde la app")
+        for ((table, key) in KNOWN_KEYS) {
+            log.line("  $table/$key = ${readSettingDescribed(cr, table, key)}")
+        }
+        log.line("NXTPAPER: claves candidatas de la investigación (se esperan null) en System, Secure y Global")
         for (table in TABLES) {
             for (key in INK_KEYS) {
                 log.line("  $table/$key = ${readSettingDescribed(cr, table, key)}")
@@ -105,7 +130,7 @@ internal object DeviceProbe {
         SondaLog.describe(t)
     }
 
-    /** Recorre content://settings/<tabla> y registra las claves cuyo nombre contiene ink/paper/tct/nxt. */
+    /** Recorre content://settings/<tabla> y registra las claves cuyo nombre huele a modo de papel ([ProbeFormat.looksLikeInkSetting]). */
     private fun dumpTable(cr: ContentResolver, table: String, log: SondaLog) {
         val uri = Uri.parse("content://settings/$table")
         try {
@@ -128,7 +153,7 @@ internal object DeviceProbe {
                         log.line("  $table/$name = ${value?.let { "\"$it\"" } ?: "null"}")
                     }
                 }
-                log.line("query $uri: $total claves, $matches con ink/paper/tct/nxt")
+                log.line("query $uri: $total claves, $matches de modo de papel")
             }
         } catch (e: SecurityException) {
             log.line("query $uri: SecurityException: ${e.message}")

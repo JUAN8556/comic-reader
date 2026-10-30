@@ -10,7 +10,8 @@ object ProbeFormat {
 
     const val MAX_SAMPLE_BYTES: Long = 80L * 1024 * 1024
     private val SAMPLE_EXTENSIONS = listOf("cbr", "cbz", "pdf")
-    private val INK_HINTS = listOf("ink", "paper", "tct", "nxt")
+    // Las cuatro primeras, de la investigación; el resto, de las claves que adb vio en la tablet el 29-oct.
+    private val INK_HINTS = listOf("ink", "paper", "tct", "nxt", "color_mode", "eyeprotect", "reading_mode", "installed_theme")
 
     fun mb(bytes: Long): String = String.format(ES, "%.1f MB", bytes / 1_048_576.0)
 
