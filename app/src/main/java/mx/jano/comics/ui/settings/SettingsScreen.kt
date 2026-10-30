@@ -47,9 +47,13 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import mx.jano.comics.cache.CacheState
+import mx.jano.comics.cache.PinController
+import mx.jano.comics.cache.TransferReasons
 import mx.jano.comics.settings.AppSettings
 import mx.jano.comics.settings.FitMode
 import mx.jano.comics.settings.PageLayout
@@ -67,7 +71,10 @@ import mx.jano.comics.ui.nav.Screen
 import mx.jano.comics.ui.theme.NxtPaperKeys
 import mx.jano.comics.ui.theme.ThemeResolver
 
-/** Ajustes: tema, lectura, caché, carpeta raíz, copia del progreso, vaciar caché y la pantalla de diagnóstico. */
+/**
+ * Ajustes: tema, lectura, descargas en curso (la cola de fijados con Pausar/Reanudar/Cancelar y lo que se baja ahora),
+ * caché, carpeta raíz, copia del progreso, vaciar caché y la pantalla de diagnóstico.
+ */
 @Composable
 fun SettingsScreen(nav: Navigator) {
     val env = LocalUiEnv.current
@@ -105,6 +112,7 @@ fun SettingsScreen(nav: Navigator) {
             Column(Modifier.widthIn(max = 840.dp)) {
                 AppearanceSection(env, app, ink, prefs.inkPaperValues, updateApp)
                 ReadingSection(reader, updateReader)
+                DownloadsSection(env, app)
                 CacheSection(app, cache, pinProgress != null, updateApp, onClear = { confirmClear = true })
                 LibrarySection(app, nav, env)
                 ProgressSection(lastBackup, env, onRestore = { confirmRestore = true })
@@ -234,12 +242,72 @@ private fun ColumnScope.CacheSection(
     ChoiceChips(SettingsChoices.withCurrent(SettingsChoices.MIN_FREE_GB, app.minFreeGb), app.minFreeGb, { "$it${UiStrings.GB_SUFFIX}" }, { v -> updateApp { it.copy(minFreeGb = v) } })
     Spacer(Modifier.height(8.dp))
     SwitchRow(UiStrings.SET_PREFETCH, app.prefetchNext) { v -> updateApp { it.copy(prefetchNext = v) } }
-    SwitchRow(UiStrings.SET_WIFI_ONLY, app.wifiOnlyPrefetch, enabled = app.prefetchNext) { v -> updateApp { it.copy(wifiOnlyPrefetch = v) } }
+    // Vale también para los fijados (PinController.unmeteredOnly): no depende de «Descargar el siguiente número».
+    SwitchRow(UiStrings.SET_WIFI_ONLY, app.wifiOnlyPrefetch) { v -> updateApp { it.copy(wifiOnlyPrefetch = v) } }
     Spacer(Modifier.height(8.dp))
     OutlinedButton(onClick = onClear, enabled = !pinning) {
         Icon(Icons.Filled.Delete, contentDescription = null)
         Spacer(Modifier.width(8.dp))
         Text(UiStrings.SET_CLEAR_CACHE)
+    }
+    if (pinning) Help(UiStrings.SET_CLEAR_CACHE_BUSY)
+}
+
+/**
+ * Lo que se baja ahora: la cola de fijados (con su estado en texto: bajando, en pausa, esperando Wi-Fi o conexión)
+ * y sus botones, el último problema que tuvo y las demás transferencias (abrir un cómic, el siguiente número).
+ * Antes todo esto solo se veía y se manejaba desde la notificación.
+ */
+@Composable
+private fun ColumnScope.DownloadsSection(env: UiEnv, app: AppSettings) {
+    val graph = env.graph
+    val pinProgress by graph.pins.progress.collectAsStateWithLifecycle()
+    val controller = graph.pins as? PinController
+    val pausedFlow: StateFlow<Boolean> = remember(controller) { controller?.paused ?: MutableStateFlow(false) }
+    val lastErrorFlow: StateFlow<String?> = remember(controller) { controller?.lastError ?: MutableStateFlow(null) }
+    val paused by pausedFlow.collectAsStateWithLifecycle()
+    val lastError by lastErrorFlow.collectAsStateWithLifecycle()
+    val online by graph.transfers.isOnline.collectAsStateWithLifecycle()
+    val unmetered by graph.transfers.isUnmetered.collectAsStateWithLifecycle()
+    val transfers by graph.transfers.active.collectAsStateWithLifecycle()
+    val status = DownloadsLogic.pinStatus(pinProgress, paused, online, unmetered, app.wifiOnlyPrefetch)
+
+    SectionTitle(UiStrings.SET_DOWNLOADS)
+    val p = pinProgress
+    if (p == null && transfers.isEmpty()) Help(UiStrings.SET_DOWNLOADS_NONE)
+    if (p != null) {
+        Text(
+            UiStrings.setPinQueue(p.done, p.total, UiFormat.bytes(p.bytesDone), UiFormat.bytes(p.bytesTotal)),
+            style = MaterialTheme.typography.bodyLarge,
+        )
+        when (status) {
+            PinQueueStatus.DOWNLOADING -> p.current?.let { Help(UiStrings.setPinCurrent(it)) }
+            PinQueueStatus.PAUSED -> Help(UiStrings.SET_PIN_PAUSED)
+            PinQueueStatus.WAITING_WIFI -> Help(UiStrings.SET_PIN_WAITING_WIFI)
+            PinQueueStatus.WAITING_NETWORK -> Help(UiStrings.SET_PIN_WAITING_NETWORK)
+            PinQueueStatus.IDLE -> Unit
+        }
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (paused) {
+                Button(onClick = { graph.pins.resume() }) { Text(UiStrings.SET_PIN_RESUME) }
+            } else {
+                OutlinedButton(onClick = { graph.pins.pause() }) { Text(UiStrings.SET_PIN_PAUSE) }
+            }
+            TextButton(onClick = { graph.pins.cancel() }) { Text(UiStrings.SET_PIN_CANCEL) }
+        }
+        Help(UiStrings.SET_PIN_CANCEL_HELP)
+    }
+    lastError?.let { Help(UiStrings.setPinLastError(it)) }
+    for (item in transfers) {
+        if (p != null && item.reason == TransferReasons.PIN) continue // ya va arriba, con la cola
+        val name = runCatching { graph.library.book(item.bookId)?.name }.getOrNull() ?: item.bookId
+        val reason = TransferReasons.reasonLabel(item.reason)
+        val text = if (item.bytes <= 0L && item.reason == TransferReasons.PREFETCH) {
+            UiStrings.setTransferWaiting(reason, name)
+        } else {
+            UiStrings.setTransfer(reason, name, UiFormat.bytes(item.bytes), item.total?.let(UiFormat::bytes))
+        }
+        Text(text, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(vertical = 2.dp))
     }
 }
 

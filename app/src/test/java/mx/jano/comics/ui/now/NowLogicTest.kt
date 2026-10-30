@@ -51,6 +51,22 @@ class NowLogicTest {
         assertEquals(true, r.isEmpty)
     }
 
+    @Test fun inProgressBooksSurviveManyMoreRecentFinishedOnes() {
+        // 70 «Leído» recientes (como tras «Marcar todo como leído») y dos a medias más antiguos.
+        val many = (1..70).map { i ->
+            val book = Book("n$i", "N $i.cbz", "N", "N/N $i.cbz", 1, md5 = "n$i")
+            ReadingProgress(book.contentKey, 29, 30, 1_000L + i, true)
+        }
+        val reading = listOf(p(a[2], 7, false, 2), p(b[1], 3, false, 1))
+        val unread = ReadingProgress(a[4].contentKey, 0, 30, 5_000, false)
+        val everything = many + reading + unread
+        assertEquals(listOf(a[2].contentKey, b[1].contentKey), NowLogic.inProgress(everything).map { it.contentKey })
+        val active = NowLogic.withActivity(everything)
+        assertEquals(72, active.size) // sin las «No leído»
+        assertEquals(1_070L, active.first().updatedAt)
+        assertEquals(listOf("a3", "b2"), compute(active).continueReading.map { it.book.id })
+    }
+
     @Test fun unknownBooksAreIgnored() {
         val ghost = ReadingProgress("no-existe:1", 3, 10, 99, false)
         val r = compute(listOf(ghost, p(a[0], 2, false, 1)))

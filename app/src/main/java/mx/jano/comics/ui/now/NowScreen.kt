@@ -69,7 +69,7 @@ fun NowScreen(nav: Navigator) {
         value = withContext(Dispatchers.Default) {
             val byKey = idx.books.associateBy { it.contentKey }
             NowLogic.compute(
-                recent = graph.progress.recent(RECENT_LIMIT),
+                recent = NowLogic.withActivity(progress.values),
                 bookByKey = byKey::get,
                 stateOf = { LibraryLogic.stateOf(progress[it.contentKey]) },
                 nextAfter = { graph.library.nextAfter(it) },
@@ -127,7 +127,6 @@ fun NowScreen(nav: Navigator) {
     }
 }
 
-private const val RECENT_LIMIT = 60
 
 @Composable
 private fun Header(text: String) {

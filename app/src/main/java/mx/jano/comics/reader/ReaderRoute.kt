@@ -146,12 +146,11 @@ private fun ReaderRouteContent(
 
     when (val s = state) {
         is RouteState.Downloading -> {
-            val cancel: () -> Unit = {
-                runCatching { graph.cache.cancelDownload(book.id) }
-                onClose()
-            }
-            BackHandler(onBack = cancel)
-            DownloadingScreen(title, cover, s.progress, palette, onCancel = cancel)
+            // Cancelar = salir. No se llama a cancelDownload: la descarga puede ser compartida (un fijado, el N+1
+            // de WorkManager). Al desmontarse la ruta se cancela el LaunchedEffect y la caché aborta la descarga
+            // solo si ya no la espera nadie más (queda el .part para reanudar).
+            BackHandler(onBack = onClose)
+            DownloadingScreen(title, cover, s.progress, palette, onCancel = onClose)
         }
         RouteState.Opening -> {
             BackHandler(onBack = onClose)

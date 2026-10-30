@@ -57,6 +57,7 @@ import mx.jano.comics.library.Book
 import mx.jano.comics.library.Folder
 import mx.jano.comics.ui.LocalUiEnv
 import mx.jano.comics.ui.UiNaming
+import mx.jano.comics.settings.PathKeys
 import mx.jano.comics.ui.UiStrings
 import mx.jano.comics.ui.components.BookStatusLine
 import mx.jano.comics.ui.components.COVER_ASPECT
@@ -67,7 +68,10 @@ import mx.jano.comics.ui.library.BookStatus
 import mx.jano.comics.ui.library.LibraryLogic
 import mx.jano.comics.ui.nav.Navigator
 
-/** Búsqueda en toda la biblioteca por nombre (sin acentos ni mayúsculas), con los cómics agrupados por carpeta. */
+/**
+ * Búsqueda en toda la biblioteca por nombre (sin acentos ni mayúsculas), con los cómics agrupados por carpeta. Las
+ * carpetas con ficha de serie (`.indice/series.jsonl`) también salen por su título original, guion, dibujo o editorial.
+ */
 @Composable
 fun SearchScreen(nav: Navigator) {
     val env = LocalUiEnv.current
@@ -77,7 +81,14 @@ fun SearchScreen(nav: Navigator) {
     var query by rememberSaveable { mutableStateOf("") }
     val corpus by produceState<SearchCorpus?>(null, index) {
         val idx = index ?: return@produceState
-        value = withContext(Dispatchers.Default) { SearchCorpus(idx) }
+        value = withContext(Dispatchers.Default) {
+            SearchCorpus(idx) { folder ->
+                // Solo la ficha de ESA carpeta (seriesFor sube a los antepasados: sus subcarpetas no deben salir todas).
+                graph.metadata.seriesFor(folder.path)
+                    ?.takeIf { PathKeys.normalize(it.ruta) == PathKeys.normalize(folder.path) }
+                    ?.let(SearchLogic::seriesText)
+            }
+        }
     }
     val computed by produceState(SearchResults.EMPTY, corpus, query) {
         val c = corpus ?: return@produceState

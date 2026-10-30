@@ -196,13 +196,17 @@ class PinController(
             saveLocked(snap.copy(pinned = snap.pinned.filter { it.id !in ids }, queue = snap.queue.filter { it !in ids }))
             snap.queue.isEmpty()
         }
-        if (currentId in ids) currentFetch?.cancel()
+        val fetch = if (currentId in ids) currentFetch else null
+        fetch?.cancel()
         syncCachePins()
         publish()
         if (emptied) {
             stopRunners()
             notifier.clear()
         }
+        // Lo que se dejó a medias de esos libros ya no tiene dueño: fuera (si un lector lo espera, se queda).
+        fetch?.join()
+        disk?.discardPartials(ids)
     }
 
     override fun pause() {
@@ -228,14 +232,17 @@ class PinController(
     override fun cancel() {
         scope.launch {
             awaitReady()
-            mutex.withLock {
+            val pending = mutex.withLock {
                 val pending = snap.queue.toSet()
                 saveLocked(snap.copy(pinned = snap.pinned.filter { it.id !in pending }, queue = emptyList(), paused = false, batch = PinBatch()))
+                pending
             }
             syncCachePins()
             publish()
             stopRunners()
             notifier.clear()
+            // Los .part de lo cancelado ya no tienen dueño: si se quedaran, contarían contra el tope para siempre.
+            disk?.discardPartials(pending)
         }
     }
 
@@ -495,7 +502,10 @@ class PinController(
         }
         inProcessRun?.cancelAndJoin()
         inProcessRun = null
-        currentFetch?.cancel()
+        currentFetch?.let {
+            it.cancel()
+            it.join() // que la caché sepa ya que nadie espera esa descarga
+        }
     }
 
     private suspend fun syncCachePins() {

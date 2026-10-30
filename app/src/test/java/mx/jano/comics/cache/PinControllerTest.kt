@@ -185,7 +185,7 @@ class PinControllerTest {
     }
 
     @Test
-    fun `desfijar el que se esta bajando lo deja a medias y sigue con el siguiente`() = test {
+    fun `desfijar el que se esta bajando borra su parcial y sigue con el siguiente`() = test {
         val rig = Rig()
         val a = rig.env.book("a")
         val b = rig.env.book("b")
@@ -195,7 +195,11 @@ class PinControllerTest {
         pins.pin(listOf(a, b))
         val run = async { pins.runQueue(PinRunListener.NONE) }
         eventually("bajando a") { rig.env.drive.calls.get() == 1 }
+        assertTrue(java.io.File(rig.env.books, "a.part.meta").isFile)
         pins.unpin(listOf(a))
+        // Sin dueño, lo bajado a medias no se queda contando contra el tope.
+        assertFalse(java.io.File(rig.env.books, "a.part.meta").exists())
+        assertFalse(java.io.File(rig.env.books, "a.part").exists())
         gate.complete(Unit)
         assertEquals(PinRunResult.Completed(1), run.await())
         assertEquals(Availability.CLOUD, rig.cache.availability(a))
@@ -231,8 +235,13 @@ class PinControllerTest {
         rig.cache.ensureLocal(a)
         val pins = rig.controller()
         pins.pin(listOf(a, b))
+        // b tenía algo bajado de una tanda anterior.
+        java.io.File(rig.env.books, "b.part").writeBytes(ByteArray(100))
+        java.io.File(rig.env.books, "b.part.meta").writeText("{}")
         pins.cancel()
         eventually("cancelado") { rig.notifier.cleared == 1 }
+        eventually("parcial de b borrado") { !java.io.File(rig.env.books, "b.part").exists() }
+        assertFalse(java.io.File(rig.env.books, "b.part.meta").exists())
         assertEquals(setOf("a"), pins.pins.value)
         assertNull(pins.progress.value)
         assertEquals(Availability.PINNED, rig.cache.availability(a))

@@ -492,6 +492,96 @@ class DiskCacheManagerTest {
         assertEquals(Availability.CLOUD, m.availability(drop))
     }
 
+    // --- Descargas a medias sin dueño ---
+
+    private fun partial(env: CacheEnv, id: String, bytes: Int): File {
+        env.books.mkdirs()
+        File(env.books, "$id.part.meta").writeText("{}")
+        return File(env.books, "$id.part").also { it.writeBytes(ByteArray(bytes)) }
+    }
+
+    @Test
+    fun `una descarga a medias sin dueno es lo primero que se desaloja`() = test {
+        val env = env(limitGb = 10) // 10 000 bytes; libros de 3 000
+        val huerfano = partial(env, "huerfano", 6_000)
+        val fijado = partial(env, "fijado", 500)
+        val a = env.book("a")
+        val b = env.book("b")
+        val m = env.manager()
+        m.setPinnedIds(setOf("fijado"))
+        m.ensureLocal(a) // 6 500 + 3 000: cabe
+        assertTrue(huerfano.isFile)
+        m.ensureLocal(b) // 12 500 > 10 000: sale el parcial sin dueño, no un libro ni el parcial fijado
+        assertFalse(huerfano.exists())
+        assertFalse(File(env.books, "huerfano.part.meta").exists())
+        assertTrue(fijado.isFile)
+        assertEquals(Availability.LOCAL, m.availability(a))
+        assertEquals(Availability.LOCAL, m.availability(b))
+        assertEquals(6_500L, m.state.value.usedBytes)
+    }
+
+    @Test
+    fun `discardPartials borra los parciales sin duenio y respeta fijados y descargas en marcha`() = test {
+        val env = env()
+        val suelto = partial(env, "suelto", 100)
+        val fijo = partial(env, "fijo", 100)
+        val book = env.book("leyendo", zipLike(4_000))
+        env.drive.gate = CompletableDeferred()
+        val m = env.manager()
+        m.setPinnedIds(setOf("fijo"))
+        val reader = async { m.ensureLocal(book) }
+        eventually("descarga en marcha") { env.drive.calls.get() == 1 }
+        m.discardPartials(listOf("suelto", "fijo", "leyendo"))
+        assertFalse(suelto.exists())
+        assertFalse(File(env.books, "suelto.part.meta").exists())
+        assertTrue(fijo.isFile)
+        assertTrue(File(env.books, "leyendo.part.meta").isFile) // el lector la sigue esperando
+        env.drive.gate!!.complete(Unit)
+        assertEquals(4_000L, reader.await().length())
+    }
+
+    @Test
+    fun `al arrancar se borran los parciales sin fijar que llevan mas de dos semanas quietos`() = test {
+        val env = env()
+        env.clock.time = System.currentTimeMillis()
+        val viejo = partial(env, "viejo", 100)
+        val viejoFijado = partial(env, "viejofijado", 100)
+        val reciente = partial(env, "reciente", 100)
+        val old = env.clock.time - DiskCacheManager.PARTIAL_MAX_AGE_MS - 60_000
+        viejo.setLastModified(old)
+        viejoFijado.setLastModified(old)
+        env.store.value = CacheSnapshot(pinned = setOf("viejofijado"))
+        env.manager().awaitReady()
+        assertFalse(viejo.exists())
+        assertFalse(File(env.books, "viejo.part.meta").exists())
+        assertTrue(viejoFijado.isFile)
+        assertTrue(reciente.isFile)
+    }
+
+    @Test
+    fun `sin cache json los fijados salen de pins json y no se desalojan`() = test {
+        val env = env(limitGb = 5) // 5 000 bytes
+        val fijo = env.book("fijo")
+        env.books.mkdirs()
+        File(env.books, "fijo.cbz").writeBytes(env.drive.contents.getValue("fijo"))
+        val otro = env.book("otro")
+        val nuevo = env.book("nuevo")
+        File(env.books, "otro.cbz").writeBytes(env.drive.contents.getValue("otro"))
+        assertNull(env.store.value) // cache.json perdido
+        val m = env.manager(pinnedFallback = { setOf("fijo") })
+        m.awaitReady()
+        assertEquals(Availability.PINNED, m.availability(fijo))
+        // Un N+1 bajado por el worker (sin PinManager en el proceso): sale el no fijado, nunca el fijado.
+        try {
+            m.ensureLocalFor(nuevo, DownloadPurpose.PREFETCH)
+        } catch (_: InsufficientSpaceException) {
+        }
+        assertTrue(File(env.books, "fijo.cbz").isFile)
+        assertEquals(Availability.PINNED, m.availability(fijo))
+        assertEquals(setOf("fijo"), env.store.value!!.pinned)
+        assertEquals(Availability.CLOUD, m.availability(otro))
+    }
+
     @Test
     fun `nombres y extensiones`() {
         assertEquals("abc_DEF-123", DiskCacheManager.safeName("abc_DEF-123"))

@@ -56,6 +56,8 @@ data class CacheSnapshot(
  *   reconoce, del nombre original.
  * - `<bookId>.part` + `<bookId>.part.meta`: descarga a medias y la huella de su versión en Drive (la escribe
  *   [DriveRestApi.download] ANTES del primer byte). Un .part sin .meta, o un .meta sin .part, se borra al arrancar.
+ *   Un .part sin dueño (ni fijado, ni protegido, ni bajándose) es lo primero que se desaloja si falta sitio; se
+ *   borra al desfijar o cancelar su fijado ([discardPartials]) y al arrancar si lleva [PARTIAL_MAX_AGE_MS] quieto.
  * - Las páginas extraídas viven aparte, en cacheDir/pages/<bookId>, y se borran con el libro.
  *
  * Una descarga termina así: verificar tamaño y md5 contra la huella (la versión que de verdad se bajó) → renombrar
@@ -85,6 +87,11 @@ class DiskCacheManager(
     private val readFloorBytes: Long = READ_FLOOR_BYTES,
     /** Si no se pasó [progress], de dónde sacarlo cuando haga falta (en la app, del AppGraph). */
     private val progressLookup: () -> ProgressStore? = { null },
+    /**
+     * Si cache.json no se pudo leer, qué está fijado (en la app, los id de pins.json); null si tampoco se sabe.
+     * Sin esto, un proceso arrancado por WorkManager (sin PinManager) adoptaría los fijados como desalojables.
+     */
+    private val pinnedFallback: () -> Set<String>? = { null },
 ) : CacheManager {
 
     /** De dónde sale «terminado / no empezado / leyendo» para la prioridad del desalojo. Sin él: LRU puro. */
@@ -119,7 +126,17 @@ class DiskCacheManager(
         val loaded = store.load()
         val snapshot = loaded ?: CacheSnapshot()
         entries = snapshot.entries.associateBy { it.bookId }
-        pinnedIds = snapshot.pinned
+        val fallbackPins = if (loaded == null) {
+            try {
+                pinnedFallback()
+            } catch (_: Throwable) {
+                null
+            }
+        } else {
+            null
+        }
+        pinnedIds = loaded?.pinned ?: fallbackPins.orEmpty()
+        if (loaded == null && fallbackPins != null) log("cache: sin cache.json; ${fallbackPins.size} fijados sacados de pins.json")
         _state = MutableStateFlow(buildState())
         state = _state.asStateFlow()
         scope.launch(io) {
@@ -131,9 +148,9 @@ class DiskCacheManager(
             } finally {
                 ready.complete(Unit)
             }
-            // Sin cache.json no se sabe aún qué está fijado: el primer desalojo espera a que lo diga el PinManager
-            // (o a la siguiente descarga / enforceLimits).
-            if (loaded != null) enforceLimitsQuietly()
+            // Sin cache.json ni pins.json no se sabe aún qué está fijado: el primer desalojo espera a que lo diga el
+            // PinManager (o a la siguiente descarga / enforceLimits).
+            if (loaded != null || fallbackPins != null) enforceLimitsQuietly()
             // Si cambian el tope o el margen en Ajustes, se aplican al momento.
             settings.app
                 .map { it.cacheLimitGb to it.minFreeGb }
@@ -402,10 +419,10 @@ class DiskCacheManager(
                     storage.freeBytes(booksDir), app.minFreeGb.toLong() * bytesPerGb,
                 )
             }
-            evictLocked(plan.evict)
+            evictLocked(plan)
             plan
         }
-        if (plan.evict.isNotEmpty()) publishState()
+        if (plan.evict.isNotEmpty() || plan.evictPartials.isNotEmpty()) publishState()
     }
 
     override suspend fun enforceLimits(protect: Set<String>) {
@@ -420,25 +437,33 @@ class DiskCacheManager(
             if (!plan.limitOk || !plan.freeOk) {
                 log("cache: tras desalojar ${plan.evict.size} sigue sin caber (uso ${plan.usedAfter}, libre ${plan.freeAfter})")
             }
-            evictLocked(plan.evict)
-            plan.evict
+            evictLocked(plan)
+            plan
         }
-        if (evicted.isNotEmpty()) log("cache: desalojados ${evicted.size} libros (${evicted.sumOf { it.bytes }} bytes)")
+        if (evicted.evict.isNotEmpty() || evicted.evictPartials.isNotEmpty()) {
+            log("cache: desalojados ${evicted.evict.size} libros y ${evicted.evictPartials.size} parciales (${evicted.freedBytes} bytes)")
+        }
         publishState()
     }
 
     private fun planLocked(incoming: Long, extraProtect: Set<String>): EvictionPlan {
         val app = settings.app.value
         val inFlight = synchronized(flightsLock) { flights.keys.toSet() }
+        val protect = protectIds + extraProtect + inFlight
+        val partials = partialFilesOnDisk()
         val input = EvictionInput(
             entries = entries.values.toList(),
             pinned = pinnedIds,
-            protect = protectIds + extraProtect + inFlight,
-            partialBytes = partialBytesOnDisk(),
+            protect = protect,
+            partialBytes = partials.sumOf { it.length() },
             limitBytes = app.cacheLimitGb.toLong() * bytesPerGb,
             freeBytes = storage.freeBytes(booksDir),
             minFreeBytes = app.minFreeGb.toLong() * bytesPerGb,
             incomingBytes = incoming,
+            orphanPartials = partials.mapNotNull { f ->
+                val id = idOf(f.name)
+                if (id in protect || isPinned(id)) null else PartialDownload(id, f.length(), f.lastModified())
+            },
         )
         return EvictionPolicy.plan(input, ::readStateOf)
     }
@@ -459,16 +484,53 @@ class DiskCacheManager(
     }
 
     /** Bajo [mutex]. */
-    private suspend fun evictLocked(victims: List<CachedBook>) {
-        if (victims.isEmpty()) return
+    private suspend fun evictLocked(plan: EvictionPlan) {
+        val victims = plan.evict
+        val partials = plan.evictPartials
+        if (victims.isEmpty() && partials.isEmpty()) return
         withContext(io) {
+            for (partial in partials) {
+                log("cache: borro la descarga a medias sin dueño ${partial.bookId} (${partial.bytes} bytes)")
+                deletePartial(partial.bookId)
+            }
             for (victim in victims) {
                 File(victim.file).delete()
                 File(pagesRoot, safeName(victim.bookId)).deleteRecursively()
             }
         }
+        if (victims.isEmpty()) return
         entries = entries - victims.map { it.bookId }.toSet()
         persistLocked()
+    }
+
+    /**
+     * Borra las descargas a medias (.part + .meta) de [ids] que ya no tienen dueño: ni fijadas, ni protegidas, ni
+     * bajándose para alguien (un lector que espera el mismo libro la conserva). Si la descarga se está cancelando,
+     * espera a que acabe. Para desfijar y cancelar fijados: si no, sus bytes contarían contra el tope para siempre.
+     */
+    suspend fun discardPartials(ids: Collection<String>) {
+        if (ids.isEmpty()) return
+        awaitReady()
+        var removed = false
+        for (id in ids.toSet()) {
+            val flight = synchronized(flightsLock) { flights[id] }
+            if (flight != null) {
+                if (!flight.job.isCancelled) continue // alguien la sigue esperando
+                flight.job.join()
+            }
+            mutex.withLock {
+                if (isPinned(id) || id in protectIds || isDownloading(id)) return@withLock
+                val part = partFile(id)
+                val meta = DriveRestApi.partialVersionFile(part)
+                withContext(io) {
+                    if (part.exists() || meta.exists()) {
+                        deletePartial(id)
+                        removed = true
+                    }
+                }
+            }
+        }
+        if (removed) publishState()
     }
 
     override suspend fun evict(book: Book) {
@@ -544,6 +606,17 @@ class DiskCacheManager(
                     f.delete()
                 }
             }
+            // Descargas a medias abandonadas hace mucho (sin fijar): ya no las va a reanudar nadie.
+            val now = clock.now()
+            for (f in booksDir.listFiles().orEmpty()) {
+                if (!f.isFile || !f.name.endsWith(PART_SUFFIX)) continue
+                val id = idOf(f.name)
+                if (id in pinnedIds || entries[id]?.pinned == true) continue
+                if (now - f.lastModified() > PARTIAL_MAX_AGE_MS) {
+                    log("cache: borro la descarga a medias abandonada ${f.name}")
+                    deletePartial(id)
+                }
+            }
             val kept = entries.filterValues { File(it.file).isFile }.toMutableMap()
             if (kept.size != entries.size) changed = true
             for (f in files) {
@@ -613,8 +686,10 @@ class DiskCacheManager(
         _state.value = buildState()
     }
 
-    private fun partialBytesOnDisk(): Long =
-        booksDir.listFiles().orEmpty().filter { it.name.endsWith(PART_SUFFIX) }.sumOf { it.length() }
+    private fun partialFilesOnDisk(): List<File> =
+        booksDir.listFiles().orEmpty().filter { it.name.endsWith(PART_SUFFIX) }
+
+    private fun partialBytesOnDisk(): Long = partialFilesOnDisk().sumOf { it.length() }
 
     private fun partFile(bookId: String) = File(booksDir, safeName(bookId) + PART_SUFFIX)
 
@@ -632,6 +707,9 @@ class DiskCacheManager(
         const val READ_FLOOR_BYTES = 512L * 1_000_000L
         const val PROGRESS_INTERVAL_MS = 250L
         const val MAX_VERIFY_ATTEMPTS = 2
+
+        /** Una descarga a medias sin fijar que lleva tanto sin tocarse se borra al arrancar (14 días). */
+        const val PARTIAL_MAX_AGE_MS = 14L * 24 * 60 * 60 * 1000
 
         internal const val PART_SUFFIX = ".part"
         internal const val META_SUFFIX = ".meta"

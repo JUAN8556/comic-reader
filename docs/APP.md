@@ -61,7 +61,10 @@ Es una rejilla de estantes y números con el mismo orden y los mismos nombres qu
   - Borrar de la tablet. Quita antes el fijado.
   - Sentido de lectura: manga, occidental o heredar. La opción elegida lleva una marca de visto.
   - Ver la ficha de la serie.
-- **«Continuar».** En la raíz hay una fila con lo que estás leyendo.
+- **«Continuar».** En la raíz hay una fila con lo que estás leyendo: todo lo que está a medias, lo más reciente
+  primero y como mucho 16. Sale del progreso entero, así que marcar una serie larga como leída no la vacía.
+- **Arranque en frío.** Mientras se lee `index.json` de la tablet sale «Cargando la biblioteca…», sin el botón
+  «Escanear ahora» (que solo aparece si de verdad no hay índice).
 - **Sin conexión.** Aparece un aviso arriba y lo que no está en la tablet sale atenuado con una nube tachada. Si
   intentas abrirlo, un diálogo explica por qué no se puede.
 
@@ -85,7 +88,9 @@ Sin datos dice «Sin ficha todavía». Todo esto sale de `Cómics/.indice` (ver 
 ### Búsqueda
 
 Busca en toda la biblioteca sin distinguir acentos ni mayúsculas, y cada palabra tiene que aparecer. Salen primero
-las carpetas y después los números agrupados por carpeta, como mucho 400 con el total a la vista.
+las carpetas y después los números agrupados por carpeta, como mucho 400 con el total a la vista. Una carpeta con
+ficha de serie también sale por lo que dice su ficha: título, título original, serie canónica, guion, dibujo y
+editoriales (solo la ficha de esa misma carpeta, no la heredada de la madre).
 
 ### Ajustes
 
@@ -99,14 +104,19 @@ las carpetas y después los números agrupados por carpeta, como mucho 400 con e
 | Descargas y caché | Tope de la caché: 10 / 20 / 40 / 100 GB | 20 GB |
 | | Dejar siempre libre: 5 / 10 / 15 / 20 GB | 15 GB |
 | | Descargar el siguiente número mientras lees | Sí |
-| | Solo con Wi-Fi | Sí |
+| | Descargar solo con Wi-Fi (el siguiente número y los fijados) | Sí |
 | Biblioteca | Carpeta raíz (Cambiar), Volver a escanear | |
 | Progreso | Copiar a Drive, Restaurar de Drive, fecha de la última copia | |
 | Avanzado | Diagnóstico (la sonda), versión | |
 
+- **Descargas en curso.** Antes de la caché, Ajustes enseña la cola de fijados («Fijados para leer sin conexión: 4
+  de 10 · 1,2 GB de 3,0 GB»), qué se baja ahora, si está en pausa, esperando Wi-Fi o esperando conexión (en texto),
+  el último problema («sin espacio», «ya no está en Drive») y los botones Pausar o Reanudar y «Cancelar lo
+  pendiente». Debajo, las demás transferencias: lo que se abre y el siguiente número.
 - **Estado de la caché.** Ajustes enseña el estado: usado, tope y libre en la tablet, en GB decimales como los
   Ajustes de Android, más cuántos números hay descargados y cuántos fijados.
-- **«Vaciar caché».** Borra lo descargado salvo lo fijado.
+- **«Vaciar caché».** Borra lo descargado salvo lo fijado. Mientras haya fijados en cola está desactivado, y un texto
+  explica por qué.
 - **Tema automático.** Enseña las claves NXTPAPER que lee ahora («Modo detectado: …»). Pon la tablet en Ink Paper y
   pulsa **«Este es el modo Ink Paper»**: desde entonces el alto contraste se pone y se quita solo al cambiar de modo
   con el botón de la tablet. «Olvidar» borra lo guardado.
@@ -114,9 +124,11 @@ las carpetas y después los números agrupados por carpeta, como mucho 400 con e
 ### Lector
 
 1. **Descargando.** Si el número no está en la tablet, se enseña un anillo con el %, «12,3 de 40,0 MB · 1.840 KB/s ·
-   quedan 25 s» y «Cancelar».
-2. **Abriendo.** Abre ZIP, RAR4 (también sólido), RAR5 y PDF.
-3. **Leyendo.** Empieza en la página donde lo dejaste. Un número terminado se abre por el principio.
+   quedan 25 s» y «Cancelar». Cancelar sale del lector: la descarga se para solo si nadie más la espera (un fijado o
+   el siguiente número la siguen), y lo bajado queda para reanudar.
+2. **Abriendo.** Abre ZIP, RAR4 (también sólido), RAR5 y PDF. Un 7z o un TAR dicen que esta versión aún no los lee.
+3. **Leyendo.** Empieza en la página donde lo dejaste. Un número terminado y dejado en su final se abre por el
+   principio; si lo estás releyendo (sigue «Leído», pero lo dejaste a la mitad), se retoma donde quedó.
 4. **Fin.** Después de la última página hay un pliego más con «Siguiente: <nombre>», su portada, «Leer» y «Volver».
    Si no hay siguiente, dice «Has terminado la carpeta».
 
@@ -144,7 +156,8 @@ las carpetas y después los números agrupados por carpeta, como mucho 400 con e
   Un «atrás» abre la superposición con el aviso «Atrás otra vez para salir del libro», y el segundo sale. Arregla el
   fallo UI-4 de la sonda.
 - **Pantalla.** Va a pantalla completa con las barras del sistema ocultas mientras no está la superposición, y queda
-  encendida mientras lees.
+  encendida mientras lees. Al saltar al siguiente número con «Leer», el lector que sale no le devuelve las barras ni
+  le apaga la pantalla al que entra.
 
 ## Flujos
 
@@ -157,15 +170,22 @@ sacar por prefijo), se genera con el archivo ya bajado.
 **Fijar.** El número o la serie entra en una cola (`files/pins.json`) que baja un trabajo «user-initiated» de
 JobScheduler:
 
-- Lleva una notificación de progreso con Pausar, Reanudar y Cancelar. La primera vez que fijas, la app pide el permiso
-  de notificaciones; sin él se baja igual.
+- Lleva una notificación de progreso con Pausar, Reanudar y Cancelar, que responden aunque el sistema haya cerrado la
+  app (el receptor está en el manifiesto). La primera vez que fijas, la app pide el permiso de notificaciones; sin él
+  se baja igual. Lo mismo se maneja desde Ajustes → Descargas en curso.
 - Lo fijado no se desaloja nunca, y la cola sobrevive a cerrar la app.
+- Quitar el fijado o cancelar lo pendiente borra lo que quedó a medias de esos números (salvo que el lector lo esté
+  bajando en ese momento).
 
 **Caché.** Los números van en `Android/data/<paquete>/files/books` y las páginas extraídas en `cache/pages/<id>`. No se
 piden permisos de almacenamiento.
 
-- **Desalojo.** Al pasar el tope, o al bajar de lo que hay que dejar libre, sale primero lo terminado, luego lo no
-  empezado y por último lo que se está leyendo, siempre lo más antiguo antes.
+- **Desalojo.** Al pasar el tope, o al bajar de lo que hay que dejar libre, sale primero lo bajado a medias que ya no
+  espera nadie (una lectura o un fijado cancelados), luego lo terminado, luego lo no empezado y por último lo que se
+  está leyendo, siempre lo más antiguo antes. Al arrancar se borra lo bajado a medias sin fijar que lleva más de 14
+  días quieto.
+- **Si se pierde `cache.json`.** Los fijados se sacan de `pins.json`, para que un proceso arrancado por WorkManager
+  (sin pantalla) no los trate como desalojables.
 - **El número que abres.** Puede pasar el tope, pero nunca deja menos de 512 MB libres.
 - **Los fijados.** También pueden pasar el tope, pero nunca bajan del margen libre.
 
@@ -180,6 +200,8 @@ guarda en `files/progress.json` y tiene copia en la carpeta oculta de la app en 
 `files/index.json` y la biblioteca se pinta con él al momento.
 
 - Al arrancar se vuelve a escanear si no hay índice, si es de otra raíz o si tiene más de 6 h.
+- Un error pasajero de Drive (HTTP 500, 502, 503 o 504) se reintenta con la misma espera creciente que la cuota
+  agotada, hasta 5 intentos; ya no tumba un escaneo de unas 150 peticiones. Los POST no se repiten.
 - Se ignoran los nombres que empiezan por «.» y los accesos directos.
 - Si un escaneo devuelve vacía una raíz que tenía libros, se conserva el índice anterior.
 
@@ -227,7 +249,7 @@ trabajo de fijados y el worker del N+1 lo encuentren aunque el proceso arranque 
 
 Los textos de la interfaz están en un `Strings.kt` por paquete, a la espera de la i18n.
 
-Pruebas JVM: `make test`, o `./gradlew :app:testDebugUnitTest`. Son 376 pruebas en 44 suites, con 1 omitida
+Pruebas JVM: `make test`, o `./gradlew :app:testDebugUnitTest`. Son 392 pruebas en 45 suites, con 1 omitida
 (`LocalComicsReportTest`, que necesita los cómics locales de la Mac).
 
 ## Fuera del MVP o pendiente
@@ -244,8 +266,8 @@ Pruebas JVM: `make test`, o `./gradlew :app:testDebugUnitTest`. Son 376 pruebas 
   - El WebP de las portadas.
 - **El modo Ink Paper hay que marcarlo una vez** en Ajustes. Los valores de las claves en cada modo no se han medido
   todavía.
-- **Formatos.** 7z (`.cb7`) y TAR (`.cbt`) salen en la biblioteca pero no se abren: falta libarchive. Hoy es 1 de
-  159 ficheros locales.
+- **Formatos.** 7z (`.cb7`) y TAR (`.cbt`) salen en la biblioteca pero no se abren: falta libarchive. Al tocarlos, el
+  lector dice que esta versión aún no los lee. Hoy es 1 de 159 ficheros locales.
 - **Zoom.** En los pliegos dobles el zoom no tesela, así que a 2-3× se ve menos nítido que en una página. En vertical
   continuo el pellizco es simple, sin teselado.
 - **Biblioteca:**
@@ -254,8 +276,60 @@ Pruebas JVM: `make test`, o `./gradlew :app:testDebugUnitTest`. Son 376 pruebas 
   - No hay escaneo incremental con `changes.list`: cada escaneo relee todo.
 - **Fichas.** Una serie repartida en subcarpetas (`subcarpeta` de la taxonomía) tiene ficha en cada subcarpeta con
   números, no en la carpeta que solo contiene subcarpetas.
-- **`Cómics/_sonda/`.** Si sigue en Drive, sale como un estante más.
-- **Notificación de fijados.** Si el sistema mata el proceso con la notificación a la vista, sus botones dejan de
-  responder hasta abrir la app. La cola no se pierde.
+- **`Cómics/_sonda/`.** Si sigue en Drive, sale como un estante más. No se esconde a propósito: hasta la migración
+  real puede ser lo único que haya para probar.
 - **Pendientes de la revisión de la sonda.** Siguen abiertos AD-2 y AD-3 (`docs/SONDA.md`).
 - **Textos.** La i18n (pasar los `Strings.kt` a `strings.xml`) queda para después.
+
+## Pendientes de la revisión
+
+La revisión del MVP (30-oct) dejó estos puntos sin tocar, de severidad baja o sin confirmar, para la QA en la
+tablet. Los confirmados de severidad alta y media ya están arreglados (ver «Arreglado en la revisión»).
+
+**Para comprobar en la tablet (sin instalar todavía):**
+
+- Todo lo de «Sin probar en la tablet» de arriba.
+- Que Pausar, Reanudar y Cancelar de la notificación respondan con la app cerrada por el sistema. Reanudar tiene que
+  programar el trabajo UIDT con la app en segundo plano; si el sistema no lo deja, la notificación pide abrir la app.
+- La nueva sección Ajustes → Descargas en curso, con una serie fijada bajando, en pausa y sin Wi-Fi.
+- Saltar al N+1 con «Leer» en el tema Cover: que las barras sigan ocultas y la pantalla no se apague a media lectura.
+
+**Sin confirmar o de severidad baja (código):**
+
+- **C6 · El aborto «se fue el último» se decide dentro del cerrojo y se ejecuta fuera**
+  (`cache/DiskCacheManager.kt`, `awaitFlight`). Un recién llegado en ese hueco de milisegundos (el worker del N+1
+  justo cuando sale el lector) hereda la cancelación y el prefetch acaba en `Result.failure()`. Arreglo propuesto:
+  cancelar dentro de `flightsLock` y, si el vuelo encontrado ya se está cancelando, crear uno nuevo.
+- **C9 · `StatFs`, `listFiles` y `length()` de los `.part` en el hilo principal** (`buildState`, `remainingBytes`).
+  Son unos pocos ms; StrictMode no está activado. Arreglo propuesto: construir el estado en IO.
+- **L7 · El debounce del progreso no se vacía al pasar a segundo plano** (`reader/ReadingPolicy.kt`, `ProgressSaver`).
+  Si se pasa página y en menos de 500 ms se bloquea la tablet, la copia de Drive de `onStop` puede ir una página
+  atrás hasta el siguiente `onStop`. Arreglo propuesto: que `UiActions.onAppStopped` vacíe antes los lectores vivos.
+- **C3 · En PDF (y en archivos de más de 400 páginas) el pliego doble puede reemparejarse bajo los dedos**
+  (`reader/ReaderCore.kt`, barrido de tamaños apagado). Casi siempre lo evita la ventana de extracción; pasa al saltar
+  con la barra o al reanudar justo en un pliego apaisado que aún no se conoce. Arreglo propuesto: leer
+  `PdfRenderer.Page.width/height` sin renderizar y un barrido de cabeceras a prioridad baja en ZIP/RAR grandes.
+
+**Para decidir (Jano):**
+
+- **Pantalla «Sin conexión».** No existe como tal: lo cubren el aviso «Sin conexión: puedes leer lo que ya está en
+  la tablet», las celdas atenuadas con la nube tachada, el diálogo al abrir un número no descargado y el filtro «Sin
+  conexión». ¿Se da por bueno o se quiere una pantalla propia?
+- **PDF.** Un PDF no tiene portada en la biblioteca hasta abrirlo la primera vez (no se puede sacar por prefijo), y el
+  pliego doble no conoce sus tamaños hasta renderizar (ver C3).
+
+### Arreglado en la revisión
+
+- El número único de la migración («Título (1999).cbz» dentro de «Título») se llamaba «(1999)» y su año contaba como
+  número de ejemplar en «Faltan los números».
+- Releer un número «Leído» volvía siempre a la portada.
+- Un solo 5xx pasajero de Drive tumbaba el escaneo entero.
+- Lo bajado a medias de una lectura o un fijado cancelados contaba contra el tope para siempre.
+- «Cancelar» en el lector mataba la descarga compartida con un fijado o con el siguiente número.
+- Sin `cache.json`, un proceso arrancado por WorkManager podía desalojar fijados.
+- Al saltar al N+1 con animaciones, el lector que salía enseñaba las barras y apagaba KEEP_SCREEN_ON del que entraba.
+- En cada arranque en frío la biblioteca decía «todavía no está escaneada» y el lector restaurado «ya no está en la
+  biblioteca» mientras se leía `index.json`.
+- «Continuar» y «Leyendo ahora» perdían los libros a medias con más de 16 (o 60) «Leído» recientes.
+- No había dónde ver ni manejar las descargas fuera de la notificación, y sus botones morían con el proceso.
+- La búsqueda no miraba la ficha de serie.

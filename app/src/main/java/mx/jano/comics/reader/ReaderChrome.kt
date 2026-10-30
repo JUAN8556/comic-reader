@@ -1,5 +1,6 @@
 package mx.jano.comics.reader
 
+import android.view.Window
 import android.view.WindowManager
 import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.layout.WindowInsets
@@ -12,6 +13,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
@@ -91,26 +93,62 @@ internal fun Color.isAchromatic(tolerance: Float = 0.08f): Boolean =
 /**
  * Ventana del lector: barras del sistema ocultas mientras [immersive] (vuelven con un deslizamiento, transitorias)
  * y visibles con la superposición; FLAG_KEEP_SCREEN_ON si [keepScreenOn]. Todo se restaura al salir.
+ *
+ * La ventana es de la actividad y la comparten dos lectores durante el fundido al saltar al N+1: manda el último
+ * que la pidió ([ReaderWindowOwner]), y el que sale no le enseña las barras ni le apaga la pantalla al que entra.
  */
 @Composable
 internal fun ReaderWindowEffect(immersive: Boolean, keepScreenOn: Boolean) {
     val window = LocalActivity.current?.window ?: return
-    val controller = WindowCompat.getInsetsController(window, window.decorView)
+    val controller = remember(window) { WindowCompat.getInsetsController(window, window.decorView) }
+    val token = remember { Any() }
     DisposableEffect(window) {
-        val previousBehavior = controller.systemBarsBehavior
-        controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-        onDispose {
-            controller.show(WindowInsetsCompat.Type.systemBars())
-            controller.systemBarsBehavior = previousBehavior
-        }
+        ReaderWindowOwner.claim(token, controller)
+        onDispose { ReaderWindowOwner.release(token, window, controller) }
     }
     LaunchedEffect(immersive) {
+        ReaderWindowOwner.setImmersive(token, controller, immersive)
+    }
+    DisposableEffect(window, keepScreenOn) {
+        ReaderWindowOwner.setKeepScreenOn(token, window, keepScreenOn)
+        onDispose { }
+    }
+}
+
+/**
+ * Quién manda ahora en la ventana (el último lector que la pidió). Solo el dueño la cambia, y solo el dueño la
+ * restaura al irse: comportamiento de las barras de antes del primer lector, barras visibles y sin KEEP_SCREEN_ON.
+ * Igual que [VolumeKeyOwner] con las teclas. Todo ocurre en el hilo principal.
+ */
+internal object ReaderWindowOwner {
+    private var owner: Any? = null
+    private var savedBehavior: Int? = null
+
+    @Synchronized fun claim(token: Any, controller: WindowInsetsControllerCompat) {
+        if (owner == null) savedBehavior = controller.systemBarsBehavior
+        owner = token
+        controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+    }
+
+    @Synchronized fun setImmersive(token: Any, controller: WindowInsetsControllerCompat, immersive: Boolean) {
+        if (owner !== token) return
         if (immersive) controller.hide(WindowInsetsCompat.Type.systemBars())
         else controller.show(WindowInsetsCompat.Type.systemBars())
     }
-    DisposableEffect(window, keepScreenOn) {
+
+    @Synchronized fun setKeepScreenOn(token: Any, window: Window, keepScreenOn: Boolean) {
+        if (owner !== token) return
         if (keepScreenOn) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        onDispose { window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
+        else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    }
+
+    @Synchronized fun release(token: Any, window: Window, controller: WindowInsetsControllerCompat) {
+        if (owner !== token) return
+        owner = null
+        controller.show(WindowInsetsCompat.Type.systemBars())
+        savedBehavior?.let { controller.systemBarsBehavior = it }
+        savedBehavior = null
+        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 }
 

@@ -31,5 +31,10 @@
             android:name=".cache.PinJobService"
             android:permission="android.permission.BIND_JOB_SERVICE"
             android:exported="false" />
+
+        <!-- Botones Pausar / Reanudar / Cancelar de la notificación de los fijados (intent explícito, solo la app) -->
+        <receiver
+            android:name=".cache.PinActionReceiver"
+            android:exported="false" />
     </application>
 </manifest>

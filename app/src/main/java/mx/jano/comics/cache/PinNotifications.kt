@@ -7,14 +7,16 @@ import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.graphics.drawable.Icon
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * La notificación de los libros fijados (canal propio, importancia baja: sin sonido). Mientras corre el trabajo
  * UIDT la ata [PinJobService] con setNotification; al terminar queda «despegada» (DETACH) con el estado final.
- * Las acciones Pausar / Reanudar / Cancelar van por broadcast a un receptor registrado en tiempo de ejecución
- * ([PinActionReceiver], no exportado): no hace falta declararlo en el manifiesto.
+ * Las acciones Pausar / Reanudar / Cancelar van por broadcast explícito a [PinActionReceiver], declarado en el
+ * manifiesto y no exportado: así responden aunque el sistema haya matado el proceso con la notificación a la vista
+ * (con un receptor registrado en tiempo de ejecución, los botones quedaban muertos hasta abrir la app).
  */
 internal class PinNotifications(private val context: Context) : PinNotifier {
     private val manager: NotificationManager = context.getSystemService(NotificationManager::class.java)
@@ -129,7 +131,7 @@ internal class PinNotifications(private val context: Context) : PinNotifier {
     }
 
     private fun action(icon: Int, title: String, suffix: String): Notification.Action {
-        val intent = Intent(actionName(context, suffix)).setPackage(context.packageName)
+        val intent = Intent(actionName(context, suffix)).setClass(context, PinActionReceiver::class.java)
         val pending = PendingIntent.getBroadcast(
             context,
             requestCodeFor(suffix),
@@ -161,24 +163,37 @@ internal class PinNotifications(private val context: Context) : PinNotifier {
     }
 }
 
-/** Recibe las acciones de la notificación. Registrado en tiempo de ejecución y no exportado: solo la propia app. */
-internal class PinActionReceiver(private val controller: PinController) : BroadcastReceiver() {
+/**
+ * Recibe las acciones de la notificación. Declarado en el manifiesto (no exportado: solo la propia app, por intent
+ * explícito). Si el proceso estaba muerto, el sistema lo arranca y el gestor de fijados se crea aquí (pins.json
+ * guarda la cola). Las acciones corren en segundo plano: se mantiene vivo el broadcast hasta que se guardan.
+ */
+class PinActionReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        when (intent.action) {
-            PinNotifications.actionName(context, PinNotifications.ACTION_PAUSE) -> controller.pause()
-            PinNotifications.actionName(context, PinNotifications.ACTION_RESUME) -> controller.resume()
-            PinNotifications.actionName(context, PinNotifications.ACTION_CANCEL) -> controller.cancel()
+        val controller = try {
+            CacheRuntime.pinsFor(context)
+        } catch (e: Exception) {
+            CacheRuntime.log("notificación: no se pudo preparar el gestor de fijados: ${e.message}")
+            null
+        } ?: return
+        val action = intent.action
+        val pending = goAsync()
+        CacheRuntime.scope.launch {
+            try {
+                controller.awaitReady()
+                when (action) {
+                    PinNotifications.actionName(context, PinNotifications.ACTION_PAUSE) -> controller.pause()
+                    PinNotifications.actionName(context, PinNotifications.ACTION_RESUME) -> controller.resume()
+                    PinNotifications.actionName(context, PinNotifications.ACTION_CANCEL) -> controller.cancel()
+                }
+                delay(SETTLE_MS) // pause/resume/cancel se lanzan en el ámbito del gestor: tiempo para guardar pins.json
+            } finally {
+                pending.finish()
+            }
         }
     }
 
-    companion object {
-        fun register(context: Context, controller: PinController) {
-            val filter = IntentFilter().apply {
-                addAction(PinNotifications.actionName(context, PinNotifications.ACTION_PAUSE))
-                addAction(PinNotifications.actionName(context, PinNotifications.ACTION_RESUME))
-                addAction(PinNotifications.actionName(context, PinNotifications.ACTION_CANCEL))
-            }
-            context.registerReceiver(PinActionReceiver(controller), filter, Context.RECEIVER_NOT_EXPORTED)
-        }
+    private companion object {
+        const val SETTLE_MS = 2_000L
     }
 }

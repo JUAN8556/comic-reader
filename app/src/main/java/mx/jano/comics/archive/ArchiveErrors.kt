@@ -29,8 +29,10 @@ class CorruptArchiveException(kind: ArchiveKind, message: String, cause: Throwab
 internal object ArchiveTexts {
     fun sevenZip(file: File) =
         "«${file.name}» es un 7z (aunque se llame .cbr o .cb7). Esta versión todavía no lee 7z: llegará con libarchive."
-    fun unknown(file: File) =
-        "«${file.name}» no es un cómic que la app sepa leer: no empieza como ZIP, RAR, 7z ni PDF."
+    fun unknown(file: File) = when (file.extension.lowercase()) {
+        "cbt", "tar" -> "«${file.name}» es un TAR (.cbt). Esta versión todavía no lee TAR: llegará con libarchive."
+        else -> "«${file.name}» no es un cómic que la app sepa leer: no empieza como ZIP, RAR, 7z ni PDF."
+    }
     fun encrypted(file: File) =
         "«${file.name}» está protegido con contraseña y la app no pide contraseñas."
     fun encryptedPdf(file: File) =

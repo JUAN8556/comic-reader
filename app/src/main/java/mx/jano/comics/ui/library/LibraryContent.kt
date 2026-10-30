@@ -65,6 +65,8 @@ object LibraryContentBuilder {
         hasCover: (Book) -> Boolean,
         recent: () -> List<ReadingProgress>,
         bookByKey: (String) -> Book?,
+        /** Cuántos libros como mucho en «Continuar» (se cuenta tras quitar los que ya no están en el índice). */
+        continueLimit: Int = Int.MAX_VALUE,
     ): FolderContent {
         val folder = library.folder(folderId)
         val (childFolders, childBooks) = library.children(folderId)
@@ -88,6 +90,7 @@ object LibraryContentBuilder {
                 .filter { !it.finished && it.page > 0 }
                 .mapNotNull { p -> bookByKey(p.contentKey)?.let { InProgress(it, p) } }
                 .distinctBy { it.book.id }
+                .take(continueLimit)
         } else {
             emptyList()
         }

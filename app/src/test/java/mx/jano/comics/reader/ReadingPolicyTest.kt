@@ -20,8 +20,14 @@ class ReadingPolicyTest {
     fun pagina_de_arranque() {
         assertEquals(0, ReadingPolicy.startPage(null, 36))
         assertEquals(12, ReadingPolicy.startPage(progress(12, 36), 36))
-        // Terminado: se vuelve a abrir por el principio.
+        // Terminado y dejado en su final: se vuelve a abrir por el principio.
         assertEquals(0, ReadingPolicy.startPage(progress(35, 36, finished = true), 36))
+        assertEquals(0, ReadingPolicy.startPage(progress(0, 36, finished = true), 36))
+        // Terminado pero releyéndose por la mitad: se retoma la relectura.
+        assertEquals(50, ReadingPolicy.startPage(progress(50, 160, finished = true), 160))
+        assertEquals(119, ReadingPolicy.startPage(progress(119, 400, finished = true), 400))
+        // Terminado en un archivo que ahora tiene más páginas: su final guardado sigue siendo el final.
+        assertEquals(0, ReadingPolicy.startPage(progress(35, 36, finished = true), 40))
         // El archivo cambió y tiene menos páginas: se acota.
         assertEquals(19, ReadingPolicy.startPage(progress(30, 36), 20))
         assertEquals(0, ReadingPolicy.startPage(progress(5, 36), 0))
@@ -109,18 +115,23 @@ class ReadingPolicyTest {
     }
 
     @Test
-    fun la_ultima_pagina_marca_terminado_despues_de_guardar_y_lo_reafirma() = runTest {
+    fun la_ultima_pagina_marca_terminado_despues_de_guardar_y_volver_atras_no_pisa_la_pagina() = runTest {
         val rec = Recorder()
         val s = saver(rec)
         s.onPosition(ReaderPosition(34, 35, 36))
         advanceTimeBy(501)
         runCurrent()
         assertEquals(listOf("save 34", "finished"), rec.log)
-        // Volver atrás en la misma sesión no lo «des-termina»: se guarda la página y se reafirma.
+        // Volver atrás en la misma sesión guarda la página de verdad, sin repetir «terminado».
         s.onPosition(ReaderPosition(30, 31, 36))
         advanceTimeBy(501)
         runCurrent()
-        assertEquals(listOf("save 34", "finished", "save 30", "finished"), rec.log)
+        assertEquals(listOf("save 34", "finished", "save 30"), rec.log)
+        // Volver al final lo marca otra vez (el almacén deja la página en la última).
+        s.onPosition(ReaderPosition(34, 35, 36))
+        advanceTimeBy(501)
+        runCurrent()
+        assertEquals(listOf("save 34", "finished", "save 30", "save 34", "finished"), rec.log)
         assertEquals(listOf(36, 36), rec.finished)
     }
 

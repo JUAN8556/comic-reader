@@ -9,14 +9,22 @@ data class EvictionInput(
     val pinned: Set<String>,
     /** Nunca se tocan: el libro abierto, su N+1, lo que se está bajando. */
     val protect: Set<String>,
-    /** Bytes que ocupan las descargas parciales (.part): cuentan para el tope pero no se pueden desalojar aquí. */
+    /** Bytes que ocupan todas las descargas parciales (.part): cuentan para el tope. */
     val partialBytes: Long,
     val limitBytes: Long,
     val freeBytes: Long,
     val minFreeBytes: Long,
     /** Lo que falta por bajar del libro que se quiere meter (0 al aplicar límites sin descargar nada). */
     val incomingBytes: Long = 0,
+    /**
+     * Descargas a medias sin dueño (ni fijadas, ni protegidas, ni bajándose): una lectura o un fijado cancelados.
+     * Sus bytes ya van en [partialBytes]; son lo primero que se desaloja.
+     */
+    val orphanPartials: List<PartialDownload> = emptyList(),
 )
+
+/** Un `<bookId>.part` en disco (con su `.meta`). */
+data class PartialDownload(val bookId: String, val bytes: Long, val lastModified: Long)
 
 data class EvictionPlan(
     /** En orden de desalojo. */
@@ -27,13 +35,16 @@ data class EvictionPlan(
     val freeAfter: Long,
     val limitOk: Boolean,
     val freeOk: Boolean,
+    /** Descargas a medias sin dueño que se borran (antes que cualquier libro). */
+    val evictPartials: List<PartialDownload> = emptyList(),
 ) {
-    val freedBytes: Long get() = evict.sumOf { it.bytes }
+    val freedBytes: Long get() = evict.sumOf { it.bytes } + evictPartials.sumOf { it.bytes }
 }
 
 /**
  * Política de desalojo (LRU con prioridad). Se desaloja hasta que la caché quepa en el tope Y el volumen conserve el
  * margen libre, en este orden:
+ *  0. descargas a medias sin dueño (una lectura o un fijado cancelados), de la más vieja a la más reciente;
  *  1. terminados, del abierto hace más tiempo al más reciente;
  *  2. no empezados, igual;
  *  3. leyendo, igual.
@@ -55,6 +66,13 @@ object EvictionPolicy {
     fun plan(input: EvictionInput, readState: (CachedBook) -> ReadState?): EvictionPlan {
         var used = input.entries.sumOf { it.bytes } + input.partialBytes + input.incomingBytes
         var free = input.freeBytes - input.incomingBytes
+        val evictPartials = ArrayList<PartialDownload>()
+        for (partial in input.orphanPartials.sortedWith(compareBy<PartialDownload>({ it.lastModified }, { it.bookId }))) {
+            if (used <= input.limitBytes && free >= input.minFreeBytes) break
+            evictPartials += partial
+            used -= partial.bytes
+            free += partial.bytes
+        }
         val evict = ArrayList<CachedBook>()
         for (candidate in candidates(input, readState)) {
             if (used <= input.limitBytes && free >= input.minFreeBytes) break
@@ -68,6 +86,7 @@ object EvictionPolicy {
             freeAfter = free,
             limitOk = used <= input.limitBytes,
             freeOk = free >= input.minFreeBytes,
+            evictPartials = evictPartials,
         )
     }
 

@@ -1,6 +1,10 @@
 package mx.jano.comics.reader
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.test.TestScope
@@ -10,6 +14,7 @@ import kotlinx.coroutines.test.runTest
 import mx.jano.comics.cache.TransferItem
 import mx.jano.comics.cache.TransferQueue
 import mx.jano.comics.library.Book
+import mx.jano.comics.library.JsonProgressStore
 import mx.jano.comics.library.ProgressStore
 import mx.jano.comics.library.ReadState
 import mx.jano.comics.library.ReadingProgress
@@ -20,6 +25,8 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
+import kotlin.io.path.createTempDirectory
 
 /** La sesión de lectura contra dobles de los contratos de progreso, transferencias y ajustes. */
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -151,5 +158,44 @@ class ReadingSessionTest {
         settings.setRtl(book.path, MangaResolution.override(MangaChoice.INHERIT))
         assertTrue(settings.mangaStateFor(book.path).rtl)
         assertFalse(book.path in settings.overrides)
+    }
+
+    /** Almacén de verdad + política: un número «Leído» que se relee hasta la mitad se retoma ahí al reabrirlo. */
+    @Test
+    fun releer_un_terminado_retoma_la_pagina_con_el_almacen_de_verdad() = runTest {
+        val dir = createTempDirectory("progreso").toFile()
+        val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        try {
+            val store = JsonProgressStore(File(dir, "progress.json"), appData = null, scope = ioScope, clock = { 1L })
+            fun open() = ReadingSession(book, next, store, FakeTransfers(), prefetchEnabled = { false }, scope = backgroundScope)
+
+            // Primera lectura hasta el final (pliego doble 159-160 de 160).
+            val first = open()
+            assertEquals(0, first.startPage(160))
+            first.onPosition(ReaderPosition(158, 159, 160))
+            first.close()
+            runCurrent()
+            assertEquals(ReadState.FINISHED, store.stateOf(book))
+
+            // Se vuelve a abrir por la portada y se relee hasta la página 51.
+            val second = open()
+            assertEquals(0, second.startPage(160))
+            second.onPosition(ReaderPosition(50, 51, 160))
+            second.close()
+            runCurrent()
+            assertEquals(ReadState.FINISHED, store.stateOf(book))
+
+            // La relectura se retoma donde quedó.
+            val third = open()
+            assertEquals(50, third.startPage(160))
+            // Llegar otra vez al final («Fin del número») y salir: la siguiente apertura vuelve a la portada.
+            third.onPosition(ReaderPosition(158, 159, 160, atEnd = true))
+            third.close()
+            runCurrent()
+            assertEquals(0, open().startPage(160))
+        } finally {
+            ioScope.cancel()
+            dir.deleteRecursively()
+        }
     }
 }

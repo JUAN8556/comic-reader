@@ -327,7 +327,10 @@ class DriveRestApiTest {
 
     @Test
     fun error_con_cuerpo_no_JSON_lanza_sin_reason() = runTest {
-        server.enqueue(MockResponse.Builder().code(500).body("<html>oops</html>").build())
+        // Un 500 se reintenta: hace falta agotar los intentos para que llegue la excepción.
+        repeat(DriveRestApi.MAX_RATE_LIMIT_ATTEMPTS) {
+            server.enqueue(MockResponse.Builder().code(500).body("<html>oops</html>").build())
+        }
 
         try {
             api(FakeTokens("t1")).about()
@@ -336,6 +339,35 @@ class DriveRestApiTest {
             assertEquals(500, e.code)
             assertNull(e.reason)
         }
+        assertEquals(DriveRestApi.MAX_RATE_LIMIT_ATTEMPTS, server.requestCount)
+        assertEquals(DriveRestApi.MAX_RATE_LIMIT_ATTEMPTS - 1, sleeps.size)
+    }
+
+    @Test
+    fun error_5xx_pasajero_hace_backoff_y_luego_OK() = runTest {
+        server.enqueue(error(503, "backendError"))
+        server.enqueue(MockResponse.Builder().code(502).build())
+        server.enqueue(json(200, """{"user":{"emailAddress":"a@b.c"}}"""))
+
+        api(FakeTokens("t1")).about()
+
+        assertEquals(3, server.requestCount)
+        assertEquals(2, sleeps.size)
+        assertTrue("1.º en [1, 2) s: $sleeps", sleeps[0] in 1_000L until 2_000L)
+    }
+
+    @Test
+    fun error_501_no_se_reintenta() = runTest {
+        server.enqueue(error(501, "notImplemented"))
+
+        try {
+            api(FakeTokens("t1")).about()
+            fail("debía lanzar")
+        } catch (e: DriveHttpException) {
+            assertEquals(501, e.code)
+        }
+        assertEquals(1, server.requestCount)
+        assertTrue(sleeps.isEmpty())
     }
 
     @Test

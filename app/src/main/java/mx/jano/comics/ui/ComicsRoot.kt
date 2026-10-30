@@ -174,11 +174,14 @@ private fun ScreenSlot(holder: SaveableStateHolder, screen: Screen, nav: NavView
 private fun ReaderHost(bookId: String, nav: Navigator) {
     val graph = LocalUiEnv.current.graph
     val index by graph.library.index.collectAsStateWithLifecycle()
+    val indexLoading = rememberIndexLoading(graph.library)
     val book = remember(bookId, index) { graph.library.book(bookId) }
     if (book == null) {
+        // Con la pila restaurada tras un arranque en frío, el índice puede no haber llegado aún: no está «ido».
+        val text = if (index == null && indexLoading) UiStrings.LOADING else UiStrings.READER_BOOK_GONE
         Column(Modifier.fillMaxSize()) {
             ComicsTopBar(title = null, onBack = nav::back)
-            Text(UiStrings.READER_BOOK_GONE, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(24.dp))
+            Text(text, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(24.dp))
         }
         return
     }

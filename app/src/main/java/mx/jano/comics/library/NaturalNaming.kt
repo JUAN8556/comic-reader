@@ -112,7 +112,9 @@ internal object NaturalComparator : Comparator<String> {
  *   (Forum)» casa con «Hulk.La Caida Del Panteon 01») y un número de orden delante del nombre del fichero
  *   («00 Guardians of The Galaxy 07» en «Guardians of the Galaxy» → «07»).
  * - El prefijo tiene que acabar en frontera de palabra: «Bat» no se come el «Bat» de «Batman 01».
- * - Si no queda nada (el fichero se llama como el estante), se deja el nombre entero.
+ * - Si no queda nada (el fichero se llama como el estante), se deja el nombre entero. Una coletilla suelta entre
+ *   paréntesis o corchetes cuenta como «nada»: «Título (1999)» en «Título» (el número único de la migración) se
+ *   queda «Título (1999)», no «(1999)».
  * - Los «_» se leen como espacios cuando el nombre no tiene ningún espacio («Batman_01» → «Batman 01»).
  */
 internal object SmartNames {
@@ -141,18 +143,22 @@ internal object SmartNames {
         val candidates = folderCandidates(folder)
         for (candidate in candidates) {
             val rest = stripPrefix(stem, candidate)
-            if (!rest.isNullOrEmpty()) return rest
+            if (isMeaningfulRest(rest)) return rest!!
         }
         // Número de orden delante («00 Guardians of The Galaxy 07»).
         LEADING_ORDER.find(stem)?.let { m ->
             val tail = stem.substring(m.range.last + 1)
             for (candidate in candidates) {
                 val rest = stripPrefix(tail, candidate)
-                if (!rest.isNullOrEmpty()) return rest
+                if (isMeaningfulRest(rest)) return rest!!
             }
         }
         return stem
     }
+
+    /** Lo que queda tras quitar el estante vale como nombre si, sin sus grupos entre paréntesis o corchetes, dice algo. */
+    private fun isMeaningfulRest(rest: String?): Boolean =
+        !rest.isNullOrEmpty() && rest.replace(GROUPS, "").any { it.isLetterOrDigit() }
 
     private val LEADING_ORDER = Regex("""^\d{1,4}[\s._-]+""")
     private val TRAILING_GROUP = Regex("""\s*[(\[][^()\[\]]*[)\]]\s*$""")
@@ -224,7 +230,8 @@ internal object SmartNames {
     /**
      * Número del ejemplar a partir del nombre del fichero (para «números que faltan»), mirando el nombre sin el
      * prefijo del estante y, primero, lo que no está entre paréntesis. Por orden: «#04»; «Tomo 54», «Vol. 3», «Nº 7»…;
-     * el primer número suelto que no sea un año (1900-2099). null si no hay.
+     * el primer número suelto que no sea un año (1900-2099). null si no hay (un año solo, como el de «Título (1999)»,
+     * no es un número de ejemplar).
      */
     fun issueNumber(fileName: String, folderName: String): Int? {
         val name = smartName(fileName, folderName)
@@ -238,6 +245,6 @@ internal object SmartNames {
         WORD_NUMBER.find(text)?.let { return it.groupValues[1].toIntOrNull() }
         val numbers = NUMBER.findAll(text).map { it.value }.toList()
         val nonYear = numbers.firstOrNull { !(it.length == 4 && it.toInt() in 1900..2099) }
-        return (nonYear ?: numbers.firstOrNull())?.toIntOrNull()
+        return nonYear?.toIntOrNull()
     }
 }

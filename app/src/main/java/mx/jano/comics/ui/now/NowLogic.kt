@@ -13,6 +13,19 @@ data class NowLists(val continueReading: List<InProgress>, val next: List<Book>)
 
 object NowLogic {
     /**
+     * Las entradas con actividad (en curso o leídas; no las «No leído»), de la más reciente a la más antigua, sin
+     * tope: el progreso entero ya está en memoria ([mx.jano.comics.library.ProgressStore.all]). Pasar por
+     * `recent(limit)` aquí perdía los libros a medias en cuanto había más «Leído» recientes que el tope (p. ej. tras
+     * «Marcar todo como leído» en una serie larga).
+     */
+    fun withActivity(all: Collection<ReadingProgress>): List<ReadingProgress> =
+        all.filter { it.state != ReadState.UNREAD }.sortedByDescending { it.updatedAt }
+
+    /** Solo las entradas en curso (empezadas y sin terminar), de la más reciente a la más antigua. */
+    fun inProgress(all: Collection<ReadingProgress>): List<ReadingProgress> =
+        all.filter { !it.finished && it.page > 0 }.sortedByDescending { it.updatedAt }
+
+    /**
      * «Continuar»: los libros en curso, del más reciente al más antiguo.
      * «Siguientes»: por cada serie (carpeta) empezada, el primer libro sin leer tras el último abierto (vía nextAfter),
      * saltando los ya leídos y los que están en «Continuar».

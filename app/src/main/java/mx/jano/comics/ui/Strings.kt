@@ -24,6 +24,7 @@ object UiStrings {
     // Biblioteca
     const val LIB_CONTINUE = "Continuar"
     const val LIB_EMPTY_INDEX = "La biblioteca todavía no está escaneada."
+    const val LIB_LOADING_INDEX = "Cargando la biblioteca…"
     const val LIB_SCAN_NOW = "Escanear ahora"
     const val LIB_EMPTY_FOLDER = "Esta carpeta está vacía."
     const val LIB_EMPTY_FILTER = "Nada aquí con este filtro."
@@ -185,7 +186,7 @@ object UiStrings {
     const val SET_CACHE = "Descargas y caché"
     const val SET_CACHE_LIMIT = "Tope de la caché"
     const val SET_MIN_FREE = "Dejar siempre libre en la tablet"
-    const val SET_WIFI_ONLY = "Descargar el siguiente número solo con Wi-Fi"
+    const val SET_WIFI_ONLY = "Descargar solo con Wi-Fi (el siguiente número y los fijados)"
     const val SET_PREFETCH = "Descargar el siguiente número mientras lees"
     fun setCacheState(used: String, limit: String, free: String) = "Usados $used de $limit · libres en la tablet $free"
     fun setCacheEntries(n: Int, pinned: Int) = "${UiFormat.comics(n)} en la tablet, ${UiFormat.count(pinned)} fijados"
@@ -194,6 +195,27 @@ object UiStrings {
     const val SET_CLEAR_CACHE_BODY =
         "Se borran de la tablet los cómics descargados, salvo los fijados (para borrar uno fijado, quita antes el fijado). El progreso de lectura no se toca."
     const val SET_CLEAR_CACHE_DONE = "Caché vaciada"
+    const val SET_CLEAR_CACHE_BUSY =
+        "No se puede vaciar mientras haya fijados en cola (aunque estén en pausa): espera a que terminen o cancela lo pendiente."
+
+    // Descargas en curso (Ajustes)
+    const val SET_DOWNLOADS = "Descargas en curso"
+    const val SET_DOWNLOADS_NONE = "No se está bajando nada."
+    fun setPinQueue(done: Int, total: Int, bytesDone: String, bytesTotal: String) =
+        "Fijados para leer sin conexión: $done de $total · $bytesDone de $bytesTotal"
+    fun setPinCurrent(name: String) = "Bajando ahora: $name"
+    const val SET_PIN_PAUSED = "En pausa. Nada se baja hasta que la reanudes."
+    const val SET_PIN_WAITING_WIFI =
+        "Esperando Wi-Fi: con «Descargar solo con Wi-Fi» activado, los fijados no se bajan con datos móviles."
+    const val SET_PIN_WAITING_NETWORK = "Esperando conexión para seguir."
+    fun setPinLastError(message: String) = "Último problema: $message"
+    const val SET_PIN_PAUSE = "Pausar"
+    const val SET_PIN_RESUME = "Reanudar"
+    const val SET_PIN_CANCEL = "Cancelar lo pendiente"
+    const val SET_PIN_CANCEL_HELP = "Cancelar quita el fijado de lo que falta; lo ya bajado sigue fijado."
+    fun setTransfer(reason: String, name: String, bytes: String, total: String?) =
+        "$reason: $name · " + if (total != null) "$bytes de $total" else bytes
+    fun setTransferWaiting(reason: String, name: String) = "$reason: $name · en cola"
     const val SET_LIBRARY = "Biblioteca"
     fun setRoot(name: String?) = "Carpeta raíz: " + (name ?: "sin elegir")
     const val SET_CHANGE_ROOT = "Cambiar"

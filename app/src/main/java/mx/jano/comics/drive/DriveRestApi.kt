@@ -33,6 +33,9 @@ import kotlin.random.Random
  * - 401 → `tokens.invalidate(token)` y UN reintento con el token nuevo.
  * - 403 rateLimitExceeded / userRateLimitExceeded y 429 → backoff exponencial con jitter (1 s, 2 s, 4 s, 8 s
  *   + 0-1 s; tope 64 s; respeta Retry-After si es mayor), máximo [MAX_RATE_LIMIT_ATTEMPTS] intentos en total.
+ * - 500/502/503/504 (el «backendError» pasajero de Drive) → el mismo backoff y el mismo tope, salvo en un POST (crear
+ *   un fichero del appDataFolder dos veces lo duplicaría si el primero sí llegó). Un solo 5xx ya no tumba un
+ *   escaneo de ~150 peticiones.
  * - 403 cannotDownloadAbusiveFile en una descarga → UN reintento con `acknowledgeAbuse=true` (Jano es el dueño).
  * - Lo demás → [DriveHttpException] con el `error.errors[0].reason` del JSON.
  *
@@ -275,7 +278,7 @@ class DriveRestApi(
         var url = initialUrl
         var authRetried = false
         var abuseRetried = false
-        var rateLimitedAttempts = 0
+        var retryAttempts = 0
         while (true) {
             val token = tokens.accessToken()
             val builder = Request.Builder().url(url).method(method, body)
@@ -291,11 +294,11 @@ class DriveRestApi(
                             authRetried = true
                             tokens.invalidate(token)
                         }
-                        outcome.isRateLimit -> {
-                            rateLimitedAttempts++
-                            if (rateLimitedAttempts >= MAX_RATE_LIMIT_ATTEMPTS) throw outcome.toException()
-                            val wait = backoffMillis(rateLimitedAttempts, outcome.retryAfterSeconds)
-                            log("backoff ${wait} ms (intento $rateLimitedAttempts de $MAX_RATE_LIMIT_ATTEMPTS)")
+                        outcome.isRateLimit || (outcome.isTransientServerError && method != "POST") -> {
+                            retryAttempts++
+                            if (retryAttempts >= MAX_RATE_LIMIT_ATTEMPTS) throw outcome.toException()
+                            val wait = backoffMillis(retryAttempts, outcome.retryAfterSeconds)
+                            log("backoff ${wait} ms (intento $retryAttempts de $MAX_RATE_LIMIT_ATTEMPTS)")
                             sleeper(wait)
                         }
                         outcome.code == 403 && outcome.reason == REASON_ABUSIVE && !abuseRetried &&
@@ -381,6 +384,10 @@ class DriveRestApi(
         class Failed(val code: Int, val reason: String?, val message: String?, val retryAfterSeconds: Long?) : Outcome<Nothing> {
             val isRateLimit: Boolean
                 get() = code == 429 || (code == 403 && (reason == "rateLimitExceeded" || reason == "userRateLimitExceeded"))
+
+            /** Error pasajero del servidor de Drive (backendError, mala pasarela, no disponible, tiempo agotado). */
+            val isTransientServerError: Boolean
+                get() = code == 500 || code == 502 || code == 503 || code == 504
 
             fun toException() = DriveHttpException(
                 code,

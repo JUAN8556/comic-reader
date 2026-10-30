@@ -109,6 +109,17 @@ class NamingTest {
         assertEquals("Batman Year One", Naming.smartName("Batman Year One.pdf", "Batman - Year One"))
     }
 
+    @Test fun smart_name_numero_unico_con_anio_deja_el_nombre() {
+        // Patrón «número único» de la migración: «Título/Título (1999).cbz».
+        assertEquals("Título (1999)", Naming.smartName("Título (1999).cbz", "Título"))
+        assertEquals("Watchmen (1986)", Naming.smartName("Watchmen (1986).cbz", "Watchmen"))
+        assertEquals("Watchmen [DC] (1986)", Naming.smartName("Watchmen [DC] (1986).cbz", "Watchmen"))
+        // Con un número de orden delante, igual.
+        assertEquals("01 Watchmen (1986)", Naming.smartName("01 Watchmen (1986).cbz", "Watchmen"))
+        // Lo que no es solo coletilla se sigue recortando.
+        assertEquals("001 (1999)", Naming.smartName("Serie 001 (1999).cbr", "Serie"))
+    }
+
     @Test fun smart_name_extensiones_y_guiones_bajos() {
         assertEquals("Batman 01 (2011)", Naming.smartName("Batman_01_(2011).CBZ", "Otros"))
         assertEquals("01 (2011)", Naming.smartName("Batman_01_(2011).cbz", "Batman"))
@@ -139,6 +150,10 @@ class NamingTest {
         assertEquals(174, SmartNames.issueNumber("Uncanny X-Men 174, October 1983.cbr", "Uncanny X-Men"))
         assertEquals(7, SmartNames.issueNumber("00 Guardians of The Galaxy 07.cbr", "Guardians of the Galaxy"))
         assertNull(SmartNames.issueNumber("Batman Year One.cbz", "Batman"))
+        // Un año solo no es un número de ejemplar.
+        assertNull(SmartNames.issueNumber("Título (1999).cbz", "Título"))
+        assertNull(SmartNames.issueNumber("Watchmen (1986).cbz", "Watchmen"))
+        assertNull(SmartNames.issueNumber("Otros (2001).cbz", "Otros"))
     }
 
     @Test fun ruta_en_orden_natural_por_segmentos() {

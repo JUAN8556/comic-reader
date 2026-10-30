@@ -223,7 +223,7 @@ class CacheEnv(
     private var scope: CoroutineScope? = null
 
     /** [viaLookup]: el progreso no se pasa, se descubre al desalojar (como con la factoría de 4 parámetros). */
-    fun manager(viaLookup: Boolean = false): DiskCacheManager {
+    fun manager(viaLookup: Boolean = false, pinnedFallback: () -> Set<String>? = { null }): DiskCacheManager {
         scope?.cancel()
         val s = CoroutineScope(SupervisorJob(root.coroutineContext[Job]) + Dispatchers.IO)
         scope = s
@@ -244,6 +244,7 @@ class CacheEnv(
             bytesPerGb = 1_000,
             readFloorBytes = 100,
             progressLookup = { if (viaLookup) progress else null },
+            pinnedFallback = pinnedFallback,
         )
     }
 

@@ -32,14 +32,22 @@ object ReadingPolicy {
     const val PREFETCH_FRACTION = 0.8
 
     /**
-     * Página por la que se abre un libro: la guardada; un libro terminado se abre por el principio (volver a leerlo),
-     * y una página guardada fuera de rango (el archivo cambió) se acota.
+     * Página por la que se abre un libro: la guardada, acotada si el archivo cambió y tiene menos páginas.
+     *
+     * Un libro terminado se abre por el principio solo si se dejó en su final (volver a leerlo). Si se está releyendo
+     * (sigue «Leído», porque el almacén conserva la marca, pero la página guardada va por la mitad), se retoma ahí.
      */
     fun startPage(saved: ReadingProgress?, pageCount: Int): Int {
         if (saved == null || pageCount <= 0) return 0
-        if (saved.finished) return 0
+        if (saved.finished && isAtEnd(saved, pageCount)) return 0
         return saved.page.coerceIn(0, pageCount - 1)
     }
+
+    /** ¿La página guardada de un terminado es su final (o la portada)? Mira el recuento actual y el guardado. */
+    private fun isAtEnd(saved: ReadingProgress, pageCount: Int): Boolean =
+        saved.page <= 0 ||
+            saved.page >= pageCount - 1 ||
+            (saved.pageCount > 0 && saved.page >= saved.pageCount - 1)
 
     /** ¿Ha pasado el lector del 80 % del libro? (entonces se pide el N+1 por adelantado). */
     fun crossedPrefetchThreshold(lastVisiblePage: Int, pageCount: Int, fraction: Double = PREFETCH_FRACTION): Boolean {
@@ -51,8 +59,9 @@ object ReadingPolicy {
 
 /**
  * Guarda el progreso con debounce: cada cambio de página reprograma el guardado a [debounceMs]; [flush] lo hace ya
- * (al salir). Al llegar a la última página marca el libro como terminado; a partir de ahí, en esta sesión, cada
- * guardado vuelve a afirmar «terminado» (el almacén puede limpiar la marca al actualizar la página).
+ * (al salir). Cada vez que la posición guardada ve la última página, marca el libro como terminado (el almacén deja
+ * entonces la página en la última, y la próxima apertura empieza por la portada). Volver atrás después no repite la
+ * marca: el almacén conserva «terminado» y se guarda la página de verdad, para retomar una relectura donde quedó.
  *
  * [scope] debe sobrevivir a la pantalla (el último guardado ocurre cuando el lector ya se fue).
  */
@@ -67,7 +76,6 @@ class ProgressSaver(
     private var pending: ReaderPosition? = null
     private var lastSaved: Pair<Int, Int>? = null
     private var job: Job? = null
-    private var finishedThisSession = false
     @Volatile var closed = false
         private set
 
@@ -102,8 +110,7 @@ class ProgressSaver(
             if (key != lastSaved) {
                 if (runCatching { save(p.page, p.pageCount) }.isSuccess) lastSaved = key
             }
-            if (reachedEnd) finishedThisSession = true
-            if (finishedThisSession) runCatching { markFinished(p.pageCount) }
+            if (reachedEnd) runCatching { markFinished(p.pageCount) }
         }
     }
 }

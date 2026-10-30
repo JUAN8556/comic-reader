@@ -79,6 +79,8 @@ object CacheRuntime {
             progress = progress,
             // Con la factoría de 4 parámetros: el progreso se pide al grafo la primera vez que hace falta desalojar.
             progressLookup = { (app as? AppGraph)?.progress },
+            // Sin cache.json, lo fijado sale de pins.json (este proceso puede no tener PinManager: el worker del N+1).
+            pinnedFallback = { pinsFile(app).load()?.pinned?.map { it.id }?.toSet() },
         ).also { cache = it }
     }
 
@@ -89,7 +91,7 @@ object CacheRuntime {
         val notifications = PinNotifications(app)
         val controller = PinController(
             cache = cache,
-            store = AtomicJsonFile(File(app.filesDir, "pins.json"), PinSnapshot.serializer()),
+            store = pinsFile(app),
             scheduler = JobPinScheduler(app),
             settings = (cache as? DiskCacheManager)?.settings,
             library = library,
@@ -100,15 +102,13 @@ object CacheRuntime {
             canDownloadNow = { unmeteredOnly -> NetworkStatus.now(app).allows(unmeteredOnly) },
             log = ::log,
         )
-        try {
-            PinActionReceiver.register(app, controller)
-        } catch (e: Exception) {
-            log("no se pudo registrar el receptor de la notificación: ${e.message}")
-        }
+        // Los botones de la notificación los recibe PinActionReceiver, declarado en el manifiesto.
         visible.onVisible = { controller.onAppVisible() }
         pins = controller
         controller
     }
+
+    private fun pinsFile(app: Context) = AtomicJsonFile(File(app.filesDir, "pins.json"), PinSnapshot.serializer())
 
     fun transferQueue(context: Context, cache: CacheManager, settings: SettingsStore): WorkManagerTransferQueue =
         synchronized(this) {

@@ -11,6 +11,18 @@ class SearchLogicTest {
     private val corpus = SearchCorpus(FakeData.index())
     private fun search(q: String, max: Int = SearchLogic.MAX_BOOKS) = SearchLogic.search(corpus, q, FallbackNatural, max)
 
+    @Test fun foldersAlsoMatchTheirSeriesSheet() {
+        val withSheets = SearchCorpus(FakeData.index()) { f -> if (f.name == "Astérix") "Astérix le Gaulois Goscinny Uderzo" else null }
+        val r = SearchLogic.search(withSheets, "uderzo", FallbackNatural)
+        assertEquals(listOf("Astérix"), r.folders.map { it.name })
+        assertTrue(r.groups.isEmpty())
+        // Sin ficha, nada.
+        assertTrue(search("uderzo").isEmpty)
+        // Una ficha que falla no rompe la búsqueda.
+        val broken = SearchCorpus(FakeData.index()) { error("roto") }
+        assertEquals(listOf("Astérix"), SearchLogic.search(broken, "asterix", FallbackNatural).folders.map { it.name })
+    }
+
     @Test fun ignoresAccentsAndCase() {
         val r = search("ASTERIX")
         assertEquals(listOf("Astérix"), r.folders.map { it.name })

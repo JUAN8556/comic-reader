@@ -43,6 +43,22 @@ class LibraryContentBuilderTest {
         assertEquals(3, americano.coverBooks.size)
     }
 
+    @Test fun continueRowIsCappedAfterDroppingUnknownBooks() {
+        val c = LibraryContentBuilder.build(
+            library = library,
+            folderId = FakeData.ROOT,
+            isRoot = true,
+            progress = progress,
+            filter = LibraryFilter.ALL,
+            availabilityOf = { Availability.CLOUD },
+            hasCover = { false },
+            recent = { mx.jano.comics.ui.now.NowLogic.inProgress(progress.values) },
+            bookByKey = byKey::get,
+            continueLimit = 1,
+        )
+        assertEquals(listOf("berserk-b1"), c.continueReading.map { it.book.id })
+    }
+
     @Test fun continueRowOnlyAtTheRootAndMostRecentFirst() {
         assertEquals(listOf("berserk-b1", "xmen-b2"), build(FakeData.ROOT).continueReading.map { it.book.id })
         assertTrue(build("xmen").continueReading.isEmpty())

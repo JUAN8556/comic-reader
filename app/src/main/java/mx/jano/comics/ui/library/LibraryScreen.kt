@@ -77,6 +77,7 @@ import mx.jano.comics.settings.JsonSettingsStore
 import mx.jano.comics.ui.LocalUiEnv
 import mx.jano.comics.ui.UiEnv
 import mx.jano.comics.ui.UiStrings
+import mx.jano.comics.ui.rememberIndexLoading
 import mx.jano.comics.ui.components.Banner
 import mx.jano.comics.ui.components.BarAction
 import mx.jano.comics.ui.components.ComicIcons
@@ -85,6 +86,7 @@ import mx.jano.comics.ui.components.downloadPercent
 import mx.jano.comics.ui.components.rememberCoverFile
 import mx.jano.comics.ui.nav.Navigator
 import mx.jano.comics.ui.nav.Screen
+import mx.jano.comics.ui.now.NowLogic
 import mx.jano.comics.ui.theme.CoverColors
 import mx.jano.comics.ui.theme.LocalComicsLook
 
@@ -99,6 +101,7 @@ fun LibraryScreen(folderId: String, nav: Navigator) {
     val env = LocalUiEnv.current
     val graph = env.graph
     val index by graph.library.index.collectAsStateWithLifecycle()
+    val indexLoading = rememberIndexLoading(graph.library)
     val scan by graph.library.scanState.collectAsStateWithLifecycle()
     val progress by graph.progress.all.collectAsStateWithLifecycle()
     val pins by graph.pins.pins.collectAsStateWithLifecycle()
@@ -126,8 +129,10 @@ fun LibraryScreen(folderId: String, nav: Navigator) {
                     filter = filter,
                     availabilityOf = { graph.cache.availability(it) },
                     hasCover = { b -> runCatching { graph.covers.coverFile(b) }.getOrNull() != null },
-                    recent = { graph.progress.recent(CONTINUE_LIMIT) },
+                    // Del progreso entero, no de recent(16): 16 «Leído» recientes vaciaban la fila.
+                    recent = { NowLogic.inProgress(progress.values) },
                     bookByKey = bookByKey::get,
+                    continueLimit = CONTINUE_LIMIT,
                 )
             }
             env.folderContents[folderId] = built
@@ -162,6 +167,13 @@ fun LibraryScreen(folderId: String, nav: Navigator) {
             ) {
                 val c = content
                 when {
+                    // Arranque en frío: index.json aún se está leyendo; no es «sin escanear» (ni hay que ofrecerlo).
+                    index == null && indexLoading -> EmptyState(
+                        text = UiStrings.LIB_LOADING_INDEX,
+                        scan = scan,
+                        action = null,
+                        onAction = null,
+                    )
                     index == null -> EmptyState(
                         text = UiStrings.LIB_EMPTY_INDEX,
                         scan = scan,
