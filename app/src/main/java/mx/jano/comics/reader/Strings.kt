@@ -21,6 +21,7 @@ internal object ReaderTexts {
     const val OPENING = "Abriendo el cómic"
     const val CANCEL = "Cancelar"
     const val DOWNLOAD_FAILED = "No se pudo descargar el cómic"
+    const val DOWNLOAD_CANCELLED = "Se canceló la descarga"
     const val OPEN_FAILED = "No se pudo abrir el cómic"
     const val OFFLINE_HINT = "Comprueba la conexión: los cómics que no están en la tablet se bajan de Drive."
     fun downloadDescription(percent: String) = "Descarga al $percent"

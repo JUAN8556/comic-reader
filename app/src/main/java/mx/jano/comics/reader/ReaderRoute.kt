@@ -12,6 +12,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -21,6 +22,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import mx.jano.comics.AppGraph
@@ -103,7 +105,11 @@ private fun ReaderRouteContent(
                 }
             }
         } catch (e: CancellationException) {
-            throw e
+            // Si nos fuimos de la pantalla, se propaga. Si no, alguien canceló la descarga (la caché, otra pantalla):
+            // no se deja el anillo girando para siempre.
+            if (!isActive) throw e
+            state = RouteState.Failed(ReaderTexts.DOWNLOAD_CANCELLED, e.message ?: ReaderTexts.DOWNLOAD_CANCELLED, null)
+            return@LaunchedEffect
         } catch (t: Throwable) {
             val offline = runCatching { !graph.transfers.isOnline.value }.getOrDefault(false)
             state = RouteState.Failed(
@@ -201,34 +207,29 @@ private fun ReadingContent(
 ) {
     DisposableEffect(archive) { onDispose { closeLater(archive) } }
     val pageCount = remember(archive) { runCatching { archive.pageCount }.getOrDefault(0) }
-    val startPage = remember(archive) {
-        if (lastPage.page in 0 until pageCount) lastPage.page
-        else ReadingPolicy.startPage(runCatching { graph.progress.get(book.contentKey) }.getOrNull(), pageCount)
+    val currentPrefetch by rememberUpdatedState(prefetchNext)
+    val session = remember(book.id) {
+        ReadingSession(
+            book = book,
+            next = next,
+            progress = graph.progress,
+            transfers = graph.transfers,
+            prefetchEnabled = { currentPrefetch },
+            scope = ReaderScope,
+        )
     }
+    DisposableEffect(session) { onDispose { session.close() } }
+    val startPage = remember(archive) { session.startPage(pageCount, restoredPage = lastPage.page) }
     val context = LocalContext.current
     val pageCacheDir = remember(book.id) {
         runCatching { graph.cache.pageCacheDir(book) }.getOrNull() ?: File(context.cacheDir, "paginas/${book.id}")
     }
 
-    val saver = remember(book.id) {
-        ProgressSaver(
-            scope = ReaderScope,
-            debounceMs = 500,
-            save = { page, count -> graph.progress.update(book, page, count) },
-            markFinished = { count -> graph.progress.setFinished(book, true, count) },
-        )
-    }
-    DisposableEffect(saver) { onDispose { saver.flush(close = true) } }
-    val prefetched = remember(book.id) { booleanArrayOf(false) }
-
     // RTL efectivo: libro > carpeta > global. El contrato no lo da como flujo: se recalcula al cambiarlo desde aquí.
     var rtlVersion by remember { mutableIntStateOf(0) }
-    val rtl = remember(reader.rtlGlobal, rtlVersion) {
-        runCatching { graph.settings.rtlFor(book.path) }.getOrDefault(reader.rtlGlobal)
-    }
-    val inherited = remember(reader.rtlGlobal, rtlVersion) {
-        runCatching { graph.settings.rtlFor(MangaResolution.inheritedProbePath(book.path)) }.getOrDefault(reader.rtlGlobal)
-    }
+    val mangaState = remember(reader.rtlGlobal, rtlVersion) { graph.settings.mangaStateFor(book.path) }
+    val rtl = mangaState.rtl
+    val inherited = mangaState.inherited
     var chosen by remember(book.id) { mutableStateOf<MangaChoice?>(null) }
     val choice = chosen ?: MangaResolution.choiceFor(rtl, inherited)
     val manga = remember(choice, inherited) {
@@ -264,14 +265,7 @@ private fun ReadingContent(
         manga = manga,
         onPosition = { position ->
             lastPage.page = position.page
-            saver.onPosition(position)
-            if (!prefetched[0] && prefetchNext && next != null &&
-                ReadingPolicy.crossedPrefetchThreshold(position.lastPage, position.pageCount)
-            ) {
-                prefetched[0] = true
-                ReaderTrace.log("pasado el 80 %: se pide el siguiente número por adelantado")
-                runCatching { graph.transfers.prefetch(next) }
-            }
+            session.onPosition(position)
         },
         endPage = {
             // La portada del siguiente se busca cuando esta página se compone (el pager la precarga en el último pliego).
