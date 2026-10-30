@@ -20,10 +20,10 @@ interface ComicArchive : Closeable {
 
 object ArchiveSniffer {
     /** Decide por los bytes de cabecera, nunca por la extensión (hay ZIP y 7z disfrazados de .cbr). */
-    fun sniff(file: File): ArchiveKind = TODO("sonda/archive")
+    fun sniff(file: File): ArchiveKind = sniffFile(file)
 }
 
 object ComicArchives {
     /** Abre con el motor que toque. Páginas = solo imágenes, en orden natural (1, 2, 10; no 1, 10, 2). */
-    fun open(file: File): ComicArchive = TODO("sonda/archive")
+    fun open(file: File): ComicArchive = openComicArchive(file, OpenOptions())
 }
