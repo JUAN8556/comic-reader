@@ -62,7 +62,10 @@ internal fun ReaderCore(
     endPage: (@Composable () -> Unit)?,
     onClose: () -> Unit,
 ) {
-    val loader = remember(archive, pageCacheDir) { PageLoader(archive, pageCacheDir) }
+    val loader = remember(archive, pageCacheDir) {
+        // El foco arranca en la página de entrada: lo primero que se extrae es lo que se va a ver.
+        PageLoader(archive, pageCacheDir).also { it.setWindow(startPage, listOf(startPage)) }
+    }
     DisposableEffect(loader) { onDispose { loader.close() } }
     val pageCount = loader.pageCount
     val controller = remember(loader) { ReaderController() }

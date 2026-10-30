@@ -144,12 +144,14 @@ internal fun PagedReader(
         if (index >= map.size) {
             endPage?.invoke()
         } else {
+            val spread = map[index]
             SpreadPage(
                 spreadIndex = index,
-                spread = map[index],
+                spread = spread,
                 pageCount = pageCount,
                 loader = loader,
-                sizes = sizes,
+                firstSize = sizes[spread.first],
+                secondSize = spread.second?.let { sizes[it] },
                 fit = fit,
                 rtl = rtl,
                 viewport = viewport,

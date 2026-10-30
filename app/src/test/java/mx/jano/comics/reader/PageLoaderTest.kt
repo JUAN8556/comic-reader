@@ -89,6 +89,26 @@ class PageLoaderTest {
     }
 
     @Test
+    fun el_repaso_de_disco_publica_tamanos_sin_extraer() = runBlocking {
+        val dir = tmp.newFolder("paginas")
+        (0 until 40).forEach { File(dir, "$it.jpg").writeText("vieja $it") }
+        val archive = FakeArchive(40)
+        val loader = PageLoader(archive, dir, bounds)
+        try {
+            val sizes = withTimeout(5_000) { loader.sizes.first { it.size == 40 } }
+            assertTrue(sizes.getValue(3).isLandscape)
+            assertEquals(emptyList<Int>(), archive.order.toList())
+            // Con todo en disco, el barrido no tiene nada que extraer.
+            loader.sweep = true
+            delay(100)
+            assertEquals(emptyList<Int>(), archive.order.toList())
+            assertEquals("vieja 39", withTimeout(5_000) { loader.page(39) }.readText())
+        } finally {
+            loader.close()
+        }
+    }
+
+    @Test
     fun la_pagina_pedida_en_pantalla_adelanta_a_la_ventana() = runBlocking {
         val gate = CountDownLatch(1)
         val archive = FakeArchive(10, gate = gate)
@@ -127,6 +147,22 @@ class PageLoaderTest {
             loader.forget(2)
             val f = withTimeout(5_000) { loader.page(2) }
             assertEquals("pagina 2", f.readText())
+        } finally {
+            loader.close()
+        }
+    }
+
+    @Test
+    fun olvidar_una_pagina_mala_la_vuelve_a_extraer_del_archivo() = runBlocking {
+        val dir = tmp.newFolder("paginas")
+        File(dir, "1.jpg").writeText("corrupta")
+        val archive = FakeArchive(3)
+        val loader = PageLoader(archive, dir, bounds)
+        try {
+            assertEquals("corrupta", withTimeout(5_000) { loader.page(1) }.readText())
+            loader.forget(1)
+            assertEquals("pagina 1", withTimeout(5_000) { loader.page(1) }.readText())
+            assertEquals(listOf(1), archive.order.toList())
         } finally {
             loader.close()
         }

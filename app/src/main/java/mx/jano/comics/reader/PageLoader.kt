@@ -49,9 +49,10 @@ internal class PageLoader(
     private val done = HashMap<Int, File>()
     private val failed = HashMap<Int, Throwable>()
     private val waiters = HashMap<Int, MutableList<CompletableDeferred<File>>>()
+    /** Páginas que hay que borrar de disco antes de volver a extraerlas («Reintentar» tras un fallo al decodificar). */
+    private val forgotten = HashSet<Int>()
     private var window: List<Int> = emptyList()
     private var focus: Int = 0
-    private var scanned = false
 
     /** Barrer el libro entero en los ratos libres (solo hace falta en doble página). */
     @Volatile var sweep: Boolean = false
@@ -64,11 +65,12 @@ internal class PageLoader(
     /** Tamaños conocidos (índice → píxeles). */
     val sizes: StateFlow<Map<Int, PageSize>> = _sizes.asStateFlow()
 
+    // Repaso de lo que ya está en disco de otra sesión: solo del trabajador, por tandas y cuando no hay nada urgente.
+    private var scanCursor = 0
+    @Volatile private var scanned = false
+
     init {
-        scope.launch {
-            scanExisting()
-            workLoop()
-        }
+        scope.launch { workLoop() }
     }
 
     /** La página [index] en disco; si no está, se extrae con prioridad máxima. Lanza si la extracción falla. */
@@ -105,14 +107,18 @@ internal class PageLoader(
         wake.trySend(Unit)
     }
 
-    /** Borra la página de la caché (p. ej. si Coil no pudo decodificarla) para que la siguiente petición la reextraiga. */
+    /**
+     * Olvida la página (p. ej. si Coil no pudo decodificarla) para que la siguiente petición la reextraiga. No toca el
+     * disco ni el archivo aquí (se llama desde la interfaz y el archivo puede estar ocupado segundos con un RAR sólido):
+     * el trabajador borra el fichero viejo justo antes de extraerla de nuevo.
+     */
     fun forget(index: Int) {
         if (index !in 0 until pageCount) return
         synchronized(lock) {
             done.remove(index)
             failed.remove(index)
+            forgotten.add(index)
         }
-        runCatching { PageFiles.fileFor(dir, index, pageName(index)).delete() }
     }
 
     override fun close() {
@@ -122,37 +128,44 @@ internal class PageLoader(
         pendingWaiters.forEach { it.cancel(CancellationException("lector cerrado")) }
     }
 
-    private fun pageName(index: Int): String = synchronized(archive) { archive.pageName(index) }
+    /** Nombre de la página dentro del archivo (una consulta a la lista de entradas, sin E/S). */
+    private fun pageName(index: Int): String = archive.pageName(index)
 
-    /** Lo que ya está en disco de otra sesión: se da por extraído y se lee su tamaño (cabecera, milisegundos). */
-    private fun scanExisting() {
+    /**
+     * Un paso del repaso de lo que ya está en disco (de otra sesión): se da por extraído y se lee su tamaño
+     * (cabecera, milisegundos). Va por tandas para no retrasar la primera página de un libro grande, y publica los
+     * tamaños por tandas para no rehacer el emparejamiento a cada página.
+     */
+    private fun scanStep(batch: Int = SCAN_BATCH) {
         val found = HashMap<Int, File>()
         val sizes = HashMap<Int, PageSize>()
-        if (dir.isDirectory) {
-            for (i in 0 until pageCount) {
-                if (!scope.isActive) return
-                val f = runCatching { PageFiles.fileFor(dir, i, pageName(i)) }.getOrNull() ?: continue
-                if (f.isFile && f.length() > 0L) {
-                    found[i] = f
-                    readBounds(f)?.let { sizes[i] = it }
-                }
+        var n = 0
+        while (scanCursor < pageCount && n < batch) {
+            val i = scanCursor++
+            n++
+            if (synchronized(lock) { done.containsKey(i) || i in forgotten }) continue
+            if (!dir.isDirectory) {
+                scanCursor = pageCount
+                break
+            }
+            val f = runCatching { PageFiles.fileFor(dir, i, pageName(i)) }.getOrNull() ?: continue
+            if (f.isFile && f.length() > 0L) {
+                found[i] = f
+                runCatching { readBounds(f) }.getOrNull()?.let { sizes[i] = it }
             }
         }
-        synchronized(lock) {
-            found.forEach { (i, f) -> done.putIfAbsent(i, f) }
-            scanned = true
-        }
+        if (found.isNotEmpty()) synchronized(lock) { found.forEach { (i, f) -> done.putIfAbsent(i, f) } }
         if (sizes.isNotEmpty()) _sizes.update { it + sizes }
-        if (found.isNotEmpty()) ReaderTrace.log("${found.size} páginas ya estaban en disco")
-        // Quien esperaba una página que resultó estar en disco, ya la tiene.
-        val ready = synchronized(lock) {
-            found.keys.mapNotNull { i -> waiters.remove(i)?.let { i to it } }
+        completeWaitersOfDonePages()
+        if (scanCursor >= pageCount) {
+            scanned = true
+            ReaderTrace.log("repaso de la carpeta de páginas hecho")
         }
-        ready.forEach { (i, list) -> list.forEach { it.complete(found.getValue(i)) } }
     }
 
     private suspend fun workLoop() {
         while (scope.isActive) {
+            completeWaitersOfDonePages()
             val next = synchronized(lock) {
                 ExtractionPlanner.pick(
                     pageCount = pageCount,
@@ -165,6 +178,10 @@ internal class PageLoader(
                 )
             }
             if (next == null) {
+                if (!scanned) {
+                    scanStep()
+                    continue
+                }
                 if (wake.receiveCatching().isClosed) return
                 continue
             }
@@ -189,8 +206,18 @@ internal class PageLoader(
         }
     }
 
+    /** Quien espera una página que ya está hecha (la encontró el repaso mientras llegaba la petición), la recibe. */
+    private fun completeWaitersOfDonePages() {
+        val ready = synchronized(lock) {
+            if (waiters.isEmpty()) return
+            waiters.keys.filter { done.containsKey(it) }.map { i -> done.getValue(i) to waiters.remove(i).orEmpty() }
+        }
+        ready.forEach { (file, list) -> list.forEach { it.complete(file) } }
+    }
+
     private fun extract(index: Int): File {
         val dest = PageFiles.fileFor(dir, index, pageName(index))
+        if (synchronized(lock) { forgotten.remove(index) }) dest.delete()
         if (dest.isFile && dest.length() > 0L) {
             ReaderTrace.log("pág. ${index + 1}: ya estaba en disco (${dest.length() / 1024} KB)")
             return dest
@@ -220,6 +247,8 @@ internal class PageLoader(
     }
 
     companion object {
+        private const val SCAN_BATCH = 16
+
         /** Ancho y alto de la imagen sin decodificarla (solo la cabecera). Null si no es una imagen legible. */
         fun decodeBounds(file: File): PageSize? {
             val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }

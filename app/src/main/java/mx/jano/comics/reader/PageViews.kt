@@ -106,7 +106,8 @@ internal fun SpreadPage(
     spread: Spread,
     pageCount: Int,
     loader: PageLoader,
-    sizes: Map<Int, PageSize>,
+    firstSize: PageSize?,
+    secondSize: PageSize?,
     fit: FitMode,
     rtl: Boolean,
     viewport: PxSize,
@@ -140,9 +141,9 @@ internal fun SpreadPage(
     }
 
     if (spread.isDouble) {
-        DoubleSpreadContent(spread, pageCount, loader, sizes, fit, rtl, viewport, zoomState, isSettled, onTap)
+        DoubleSpreadContent(spread, pageCount, loader, firstSize, secondSize, fit, rtl, viewport, zoomState, isSettled, onTap)
     } else {
-        val size = sizes[spread.first] ?: loader.sizes.value[spread.first]
+        val size = firstSize ?: loader.sizes.value[spread.first]
         val spec = FitResolver.resolve(fit, rtl, size?.let { PxSize(it.width, it.height) }, viewport)
         SinglePageContent(spread.first, pageCount, loader, spec, zoomState, isSettled, onTap)
     }
@@ -234,7 +235,8 @@ private fun DoubleSpreadContent(
     spread: Spread,
     pageCount: Int,
     loader: PageLoader,
-    sizes: Map<Int, PageSize>,
+    firstSize: PageSize?,
+    secondSize: PageSize?,
     fitMode: FitMode,
     rtl: Boolean,
     viewport: PxSize,
@@ -272,8 +274,10 @@ private fun DoubleSpreadContent(
             l is PageFileState.Ready && r is PageFileState.Ready -> {
                 // «Ready» implica que el cargador ya publicó el tamaño (lo hace antes de entregar el fichero); el mapa
                 // recogido por la composición puede ir un fotograma por detrás: se mira también el valor actual.
-                val leftSize = sizes[leftIndex] ?: loader.sizes.value[leftIndex] ?: DEFAULT_PAGE
-                val rightSize = sizes[rightIndex] ?: loader.sizes.value[rightIndex] ?: DEFAULT_PAGE
+                fun sizeOf(page: Int): PageSize =
+                    (if (page == spread.first) firstSize else secondSize) ?: loader.sizes.value[page] ?: DEFAULT_PAGE
+                val leftSize = sizeOf(leftIndex)
+                val rightSize = sizeOf(rightIndex)
                 val geometry = remember(leftSize, rightSize) {
                     FitResolver.spreadContent(PxSize(leftSize.width, leftSize.height), PxSize(rightSize.width, rightSize.height))
                 }
