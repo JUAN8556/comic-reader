@@ -123,17 +123,39 @@ Una línea de `indice.jsonl`:
  "drive_id": "…", "categoria": "Americano", "editorial": "Marvel", "serie": "Serie",
  "numero": "001", "anio": null, "formato": "RAR4", "tamano": 6797134, "paginas": 28,
  "solido": false, "portada": "<md5>.webp", "original": "ruta/en/iCloud.cbr",
+ "size": 6797134, "tipo": "RAR4", "ruta_original": "ruta/en/iCloud.cbr",
  "meta_serie": {"…": "si hay metadatos de nivel 2 para la serie"}}
 ```
+
+`size`, `tipo` y `ruta_original` repiten `tamano`, `formato`+`solido` y `original`
+con los nombres que lee la app (`IndexEntry` en `metadata/Metadata.kt`): `tipo` es
+`ZIP`, `RAR4`, `RAR4_SOLID`, `RAR5`, `RAR5_SOLID`, `SEVEN_ZIP`, `TAR` o `PDF`.
 
 ## Clasificación y nombres
 
 **Clasificación.** Manda `COMICS_DATA/metadatos/taxonomia.json` (ruta de la
-carpeta → `{categoria, editorial_carpeta, serie_canonica}`; se aceptan también
-una lista de objetos con `ruta`, o el diccionario dentro de `series`). Si una
-carpeta no tiene entrada, se usa una heurística por carpeta de primer nivel y la
-serie va a la lista de revisión. La heurística de casos propios de la biblioteca
-vive fuera del repo, en `COMICS_DATA/estado/heuristica-local.json`.
+carpeta → `{categoria, editorial_carpeta, serie_canonica, subcarpeta, revisar,
+aviso}`; se aceptan también una lista de objetos con `ruta`, o el diccionario
+dentro de `series`). Si una carpeta no tiene entrada, se usa una heurística por
+carpeta de primer nivel y la serie va a la lista de revisión. La heurística de
+casos propios de la biblioteca vive fuera del repo, en
+`COMICS_DATA/estado/heuristica-local.json`.
+
+- **Categorías:** Americano, Europeo, Latinoamericano, Manga, Manhwa, Manhua y
+  `Otro` (novelas gráficas y obras sin editorial de las anteriores; en Drive,
+  `Otro/Otros/<serie>/`). Manga, Manhwa y Manhua no llevan editorial.
+- **Cada entrada mueve solo los ficheros que están directamente en esa carpeta**,
+  nunca sus subcarpetas (cada una tiene la suya). Los ficheros sueltos de la raíz
+  o de una carpeta contenedor (`.`, `DC Comics`, `Marvel`…) usan su entrada
+  propia si la hay y, si no, la de esa carpeta.
+- **`subcarpeta`:** el fichero va a `<categoria>/<editorial>/<serie>/<subcarpeta>/`
+  (partes, arcos, especiales de una misma serie). Dos carpetas con la misma serie
+  y distinta subcarpeta no chocan.
+- **`revisar: true`:** la carpeta **no entra en ninguna tanda** (ni en `mig-humo`)
+  hasta que Jano decida; el motivo está en `aviso`. `mig-plan` las cuenta y las
+  lista («En espera de decisión»), y la lista de revisión las trae en su primera
+  sección. Para soltarlas: corregir la entrada (categoría, editorial, serie…) y
+  poner `revisar` en `false`; la siguiente `make migrar` las recoge.
 
 **Normalización.** Nombres en NFC; sin espacios al principio ni al final de cada
 componente, ni dobles; «Cómics» sin espacio; las palabras disfrazadas con
@@ -282,14 +304,11 @@ aquí para decidir.
 
 ### Encontrado al aplicar los arreglos (sin tocar)
 
-- **Contrato del índice con la app.** `app/…/metadata/Metadata.kt` (`IndexEntry`)
-  espera `size`, `tipo` (`ZIP`, `RAR4`, `RAR4_SOLID`, `RAR5`, `SEVEN_ZIP`, `PDF`) y
-  `ruta_original`; `indice.jsonl` escribe `tamano`, `formato` (`7Z`, y ahora
-  también `TAR`) + `solido`, y `original`. Como la app tolera campos ausentes, no
-  falla: lee `size = 0` y `tipo = null`. Hay que alinear un lado u otro (lo más
-  barato: que el índice escriba también `size`, `tipo` y `ruta_original`) y luego
-  `make mig-indice`.
-- **Taxonomía.** `taxonomia.json` usa la categoría `Otro` en algunas entradas (no
-  está entre las seis categorías: esas carpetas caen a la heurística) y un campo
-  `subcarpeta` que la migración no lee (las subcarpetas de una serie van a la misma
-  carpeta de Drive; los choques de nombre se resuelven conservando el nombre limpio).
+- **Contrato del índice con la app: RESUELTO** (30-oct, 02:55). `indice.jsonl`
+  escribe además `size`, `tipo` y `ruta_original`, los nombres que lee `IndexEntry`
+  en `app/…/metadata/Metadata.kt`; `.indice` regenerado con `make mig-indice`.
+- **Taxonomía: RESUELTO** (30-oct, 03:00). La migración acepta la categoría `Otro`,
+  respeta `subcarpeta` y retiene las carpetas con `revisar: true` (ver
+  «Clasificación y nombres»). Con la taxonomía de los metadatos: 0 series por
+  heurística; 1.526 ficheros (27,2 GB) en 92 carpetas en espera de decisión;
+  7.840 ficheros (200,3 GB) en 14 tandas.

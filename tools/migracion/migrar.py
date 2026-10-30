@@ -51,7 +51,7 @@ GB = 1000 ** 3
 GiB = 1024 ** 3
 SF_DATALESS = 0x40000000
 
-CATEGORIAS = ("Americano", "Europeo", "Latinoamericano", "Manga", "Manhwa", "Manhua")
+CATEGORIAS = ("Americano", "Europeo", "Latinoamericano", "Manga", "Manhwa", "Manhua", "Otro")
 SIN_EDITORIAL = ("Manga", "Manhwa", "Manhua")
 ESTADOS = ("pendiente", "apartado_duplicado", "apartado_roto", "subido", "verificado",
            "desalojado", "ignorado")
@@ -227,6 +227,8 @@ CREATE TABLE IF NOT EXISTS ficheros (
     serie TEXT,
     serie_origen TEXT,          -- carpeta de origen (normalizada)
     fuente TEXT,                -- taxonomia | heuristica
+    revisar INTEGER,            -- 1 = taxonomia.json pide la decisión de Jano: no entra en ninguna tanda
+    aviso TEXT,                 -- motivo de ese «revisar»
     numero TEXT,
     anio INTEGER,
     interpretado INTEGER,
@@ -269,6 +271,12 @@ def abrir_db(cfg: Config) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=FULL")
     conn.executescript(ESQUEMA)
+    # columnas añadidas después de la primera versión (bases ya creadas)
+    columnas = {r[1] for r in conn.execute("PRAGMA table_info(ficheros)")}
+    for col, tipo in (("revisar", "INTEGER"), ("aviso", "TEXT")):
+        if col not in columnas:
+            conn.execute(f"ALTER TABLE ficheros ADD COLUMN {col} {tipo}")
+    conn.commit()
     return conn
 
 
@@ -418,18 +426,28 @@ def heuristica(primer_nivel: str, locales: dict) -> tuple[str, str]:
     return "Americano", "Otros"
 
 
-def _valida_tax(d: dict) -> tuple[str, str, str] | None:
+def _valida_tax(d: dict) -> dict | None:
+    """Entrada de taxonomia.json → categoría, editorial, serie, subcarpeta, revisar y aviso;
+    None si no sirve (categoría desconocida, sin serie, componentes con «/» o que empiezan por . o _)."""
     cat = (d.get("categoria") or "").strip()
     edit = (d.get("editorial_carpeta") or d.get("editorial") or "").strip()
     serie = (d.get("serie_canonica") or d.get("serie") or "").strip()
+    sub = (d.get("subcarpeta") or "").strip()
     if cat not in CATEGORIAS or not serie:
         return None
-    for c in (cat, edit, serie):
+    for c in (cat, edit, serie, sub):
         if c.startswith(".") or c.startswith("_") or "/" in c:
             return None
     if cat in SIN_EDITORIAL and edit.casefold() in ("", "manga", "manhwa", "manhua"):
         edit = ""
-    return cat, edit, nombres.nfc(serie)
+    return {"categoria": cat, "editorial": edit, "serie": nombres.nfc(serie),
+            "subcarpeta": nombres.nfc(sub) or None, "revisar": bool(d.get("revisar")),
+            "aviso": (str(d.get("aviso") or "")).strip() or None}
+
+
+def _campos_tax(v: dict | None) -> dict:
+    return {"subcarpeta": v["subcarpeta"] if v else None, "revisar": v["revisar"] if v else False,
+            "aviso": v["aviso"] if v else None}
 
 
 def resolver_series(censo: list[dict], taxonomia: dict, locales: dict) -> dict[str, dict]:
@@ -447,10 +465,12 @@ def resolver_series(censo: list[dict], taxonomia: dict, locales: dict) -> dict[s
             # ficheros sueltos (raíz o carpeta-editorial): cada uno es su propia «serie»
             for f in fs:
                 stem = _stem(os.path.basename(f["ruta_nfc"]))
-                tax = taxonomia.get(f["ruta_nfc"]) or taxonomia.get(os.path.splitext(f["ruta_nfc"])[0])
+                # entrada propia del fichero o, si no, la de su carpeta contenedor («.», «DC Comics»…)
+                tax = (taxonomia.get(f["ruta_nfc"]) or taxonomia.get(os.path.splitext(f["ruta_nfc"])[0])
+                       or taxonomia.get(carpeta))
                 v = _valida_tax(tax) if tax else None
                 if v:
-                    cat, edit, serie = v
+                    cat, edit, serie = v["categoria"], v["editorial"], v["serie"]
                     fuente = "taxonomia"
                 else:
                     k = nombres.clave(stem)
@@ -462,13 +482,13 @@ def resolver_series(censo: list[dict], taxonomia: dict, locales: dict) -> dict[s
                     fuente = "heuristica"
                 info["file:" + f["ruta_nfc"]] = {
                     "categoria": cat, "editorial": edit, "serie": serie, "fuente": fuente,
-                    "carpeta": carpeta, "suelto": True, "n": 1,
+                    "carpeta": carpeta, "suelto": True, "n": 1, **_campos_tax(v),
                 }
             continue
         tax = taxonomia.get(carpeta)
         v = _valida_tax(tax) if tax else None
         if v:
-            cat, edit, serie = v
+            cat, edit, serie = v["categoria"], v["editorial"], v["serie"]
             fuente = "taxonomia"
         else:
             cat, edit = heuristica(comps[0], locales)
@@ -479,12 +499,12 @@ def resolver_series(censo: list[dict], taxonomia: dict, locales: dict) -> dict[s
                 serie = f"{nombres.serie_de_carpeta(comps[-2])} - {serie}"
             fuente = "heuristica"
         info[carpeta] = {"categoria": cat, "editorial": edit, "serie": serie, "fuente": fuente,
-                         "carpeta": carpeta, "suelto": False, "n": len(fs)}
+                         "carpeta": carpeta, "suelto": False, "n": len(fs), **_campos_tax(v)}
 
     # dos carpetas heurísticas distintas con la misma serie en el mismo sitio: desambiguar
     grupos = defaultdict(list)
     for k, v in info.items():
-        if not v["suelto"]:
+        if not v["suelto"] and not v.get("subcarpeta"):
             grupos[(v["categoria"], v["editorial"], nombres.clave(v["serie"]))].append(k)
     for (_c, _e, _s), ks in grupos.items():
         heur = [k for k in ks if info[k]["fuente"] == "heuristica"]
@@ -500,7 +520,7 @@ def resolver_series(censo: list[dict], taxonomia: dict, locales: dict) -> dict[s
     vistos = Counter()
     for k in sorted(info, key=lambda x: nombres.clave_ruta(x.replace("file:", ""))):
         v = info[k]
-        if v["suelto"]:
+        if v["suelto"] or v.get("subcarpeta"):
             continue
         clave_s = (v["categoria"], v["editorial"], nombres.clave(v["serie"]))
         vistos[clave_s] += 1
@@ -538,7 +558,10 @@ def ext_declarada(nombre: str) -> str:
 def destino_de(si: dict, base: str, ext: str) -> str:
     serie = nombres.componente_seguro(si["serie"])
     nombre = nombres.recortar_nombre(nombres.componente_seguro(base), ext)
-    partes = [si["categoria"]] + ([si["editorial"]] if si["editorial"] else []) + [serie, nombre]
+    partes = [si["categoria"]] + ([si["editorial"]] if si["editorial"] else []) + [serie]
+    if si.get("subcarpeta"):
+        partes.append(nombres.componente_seguro(si["subcarpeta"]))
+    partes.append(nombre)
     return "/".join(partes)
 
 
@@ -586,7 +609,7 @@ class Plan:
             ocupados[r["destino"].casefold()] = f["ruta"]
             self.nombres[f["ruta"]] = r
 
-    def pendientes(self) -> list[dict]:
+    def _sin_subir(self) -> list[dict]:
         out = []
         for f in self.censo:
             if f["clase"] != "comic":
@@ -598,6 +621,14 @@ class Plan:
                 continue
             out.append(f)
         return out
+
+    def pendientes(self) -> list[dict]:
+        """Lo que entra en tandas: sin subir y sin «revisar: true» en taxonomia.json."""
+        return [f for f in self._sin_subir() if not info_serie(self.series, f).get("revisar")]
+
+    def en_espera(self) -> list[dict]:
+        """Sin subir pero marcados «revisar: true» en taxonomia.json: esperan la decisión de Jano."""
+        return [f for f in self._sin_subir() if info_serie(self.series, f).get("revisar")]
 
 
 def EXT_FORMATO_DB(fila: dict | None) -> str | None:  # noqa: N802
@@ -848,7 +879,8 @@ def sincronizar_censo(conn: sqlite3.Connection, plan: Plan, log: Registro):
             plan_campos = dict(categoria=si["categoria"], editorial=si["editorial"], serie=si["serie"],
                                serie_origen=si["carpeta"], fuente=si["fuente"], numero=nm["numero"],
                                anio=nm["anio"], interpretado=int(bool(nm["interpretado"])),
-                               motivo=nm["motivo"] or None, destino=nm["destino"])
+                               motivo=nm["motivo"] or None, destino=nm["destino"],
+                               revisar=int(bool(si.get("revisar"))), aviso=si.get("aviso"))
         else:
             plan_campos = {}
         if fila is None:
@@ -1229,6 +1261,13 @@ def generar_indice(cfg: Config, conn: sqlite3.Connection, log: Registro) -> dict
                 "tamano": r["tamano"], "paginas": r["paginas"], "solido": bool(r["solido"]),
                 "portada": r["portada"], "original": r["ruta_nfc"],
             }
+            # alias con los nombres que espera la app (IndexEntry en metadata/Metadata.kt)
+            tipo = r["formato"]
+            if tipo == formatos.SEVEN_ZIP:
+                tipo = "SEVEN_ZIP"
+            elif tipo in (formatos.RAR4, formatos.RAR5) and r["solido"]:
+                tipo += "_SOLID"
+            linea.update(size=r["tamano"], tipo=tipo, ruta_original=r["ruta_nfc"])
             meta = por_ruta.get(r["serie_origen"] or "") or por_serie.get(nombres.clave(r["serie"] or ""))
             if meta:
                 linea["meta_serie"] = {k: v for k, v in meta.items() if k != "ruta"}
@@ -1282,6 +1321,17 @@ def escribir_revision(cfg: Config, conn: sqlite3.Connection, log: Registro | Non
     def seccion(titulo, explicacion, cabecera, items):
         secciones.append((titulo, explicacion, cabecera, items))
 
+    espera = defaultdict(list)
+    for r in filas:
+        if r["clase"] == "comic" and r.get("revisar") and r["estado"] == "pendiente":
+            espera[(r["serie_origen"], os.path.dirname(r["destino"] or ""), r.get("aviso") or "")].append(r)
+    seccion("En espera de tu decisión (revisar: true en taxonomia.json)",
+            "No entran en ninguna tanda hasta que pongas `revisar: false` en esa entrada de "
+            "`metadatos/taxonomia.json` (y cambies lo que haga falta: categoría, editorial, serie). "
+            "El motivo está en «Aviso».",
+            ("Carpeta de origen", "Destino previsto", "Ficheros", "Aviso"),
+            [(k[0], k[1], str(len(v)), k[2]) for k, v in
+             sorted(espera.items(), key=lambda kv: nombres.clave_ruta(kv[0][0] or ""))])
     seccion("Apartados por duplicado (mismo md5)", "No se suben; el original sí.",
             ("Fichero", "Es copia de"),
             [(r["ruta_nfc"], nombres.ruta_normalizada(r["duplicado_de"] or "")) for r in filas
@@ -1409,6 +1459,11 @@ def cmd_plan(cfg: Config, args) -> int:
             estados_db[r["estado"]] = r["n"]
     pend = plan.pendientes()
     pend_b = sum(f["tamano"] for f in pend)
+    espera = plan.en_espera()
+    espera_b = sum(f["tamano"] for f in espera)
+    espera_carpetas = {}
+    for f in espera:
+        espera_carpetas.setdefault(clave_info(f), []).append(f)
     limite = int(cfg.tanda_gb * GB)
     tanda1 = elegir_tanda(pend, limite)
     tanda1_b = sum(f["tamano"] for f in tanda1)
@@ -1464,6 +1519,9 @@ def cmd_plan(cfg: Config, args) -> int:
     p("  - motivos: " + " · ".join(f"{m} {num(n)}" for m, n in motivos.most_common()))
     p(f"- Series que irían a la lista de revisión: **{num(len(series_revision))}** "
       f"(sin taxonomía {num(len(heur))}; con algún nombre sin interpretar {num(len(series_no_interp))})")
+    p(f"- En espera de tu decisión (`revisar: true` en taxonomia.json): **{num(len(espera))} ficheros "
+      f"({gb(espera_b)}) en {num(len(espera_carpetas))} carpetas**; no entran en ninguna tanda hasta que "
+      f"pongas `revisar: false` en su entrada")
     p("")
     p("## Destino en Drive")
     p("")
@@ -1509,11 +1567,20 @@ def cmd_plan(cfg: Config, args) -> int:
         if len(vistos) >= 40:
             break
     p("")
+    p("## En espera de decisión (revisar: true)")
+    p("")
+    for k in sorted(espera_carpetas, key=lambda x: nombres.clave_ruta(x.replace("file:", ""))):
+        v = plan.series.get(k)
+        destino = "/".join(x for x in (v["categoria"], v["editorial"], v["serie"], v.get("subcarpeta")) if x) if v else "?"
+        fs = espera_carpetas[k]
+        p(f"- `{k.replace('file:', '')}` → {destino} ({num(len(fs))} ficheros, {gb(sum(f['tamano'] for f in fs))})"
+          + (f": {v['aviso']}" if v and v.get("aviso") else ""))
+    p("")
     p("## Series a revisión")
     p("")
     for k in sorted(series_revision, key=lambda x: nombres.clave_ruta(x.replace("file:", ""))):
         v = plan.series.get(k)
-        destino = "/".join(x for x in (v["categoria"], v["editorial"], v["serie"]) if x) if v else "?"
+        destino = "/".join(x for x in (v["categoria"], v["editorial"], v["serie"], v.get("subcarpeta")) if x) if v else "?"
         p(f"- `{k.replace('file:', '')}` → {destino}")
     texto = "\n".join(L) + "\n"
     ruta = os.path.join(cfg.dir_logs, f"plan-{dt.datetime.now():%Y%m%d-%H%M}.md")
@@ -1608,7 +1675,12 @@ def cmd_tanda(cfg: Config, args) -> int:
             pend = plan.pendientes()
             elegidos = elegir_tanda(pend, max(0, int(cfg.tanda_gb * GB) - peso_rezag))
             if not elegidos and not rezag:
-                log("No queda nada pendiente: la biblioteca entera está migrada (o apartada).")
+                espera = plan.en_espera()
+                if espera:
+                    log(f"No queda nada que subir salvo {num(len(espera))} ficheros en espera de tu decisión "
+                        f"(«revisar: true» en taxonomia.json): pon revisar en false en esas entradas y repite.")
+                else:
+                    log("No queda nada pendiente: la biblioteca entera está migrada (o apartada).")
                 return 0
             rutas = rutas_rezag + [f["ruta"] for f in elegidos]
             tid = None
@@ -1675,6 +1747,11 @@ def cmd_humo(cfg: Config, args) -> int:
         filas.sort(key=lambda r: nombres.clave_ruta(r["ruta_nfc"]))
         if not filas:
             raise SystemExit(f"No hay cómics en {carpeta!r}.")
+        marcados = [r for r in filas if r["revisar"] and r["estado"] == "pendiente"]
+        if marcados:
+            raise SystemExit(f"{len(marcados)} de esos cómics están marcados «revisar: true» en taxonomia.json "
+                             f"({marcados[0]['aviso'] or 'sin aviso'}). Decide primero: pon revisar en false "
+                             f"en esa entrada y repite.")
         rutas = [r["ruta"] for r in filas]
         antes = {}
         for r in rutas:
@@ -1850,8 +1927,13 @@ def cmd_estado(cfg: Config, args) -> int:
         print(f"  {r['estado']:<20} {num(r['n']):>7}  {gb(r['b']):>10}")
     pend = conn.execute("SELECT COUNT(*) n, COALESCE(SUM(tamano),0) b FROM ficheros WHERE estado='pendiente' "
                         "AND clase='comic'").fetchone()
-    print(f"\nPendiente: {num(pend['n'])} cómics, {gb(pend['b'])} → ~{num(-(-pend['b'] // int(cfg.tanda_gb * GB)))} "
+    espera = conn.execute("SELECT COUNT(*) n, COALESCE(SUM(tamano),0) b FROM ficheros WHERE estado='pendiente' "
+                          "AND clase='comic' AND revisar=1").fetchone()
+    pend_n, pend_b = pend["n"] - espera["n"], pend["b"] - espera["b"]
+    print(f"\nPendiente: {num(pend_n)} cómics, {gb(pend_b)} → ~{num(-(-pend_b // int(cfg.tanda_gb * GB)))} "
           f"tandas de {num(cfg.tanda_gb)} GB")
+    if espera["n"]:
+        print(f"En espera de tu decisión (revisar: true): {num(espera['n'])} cómics, {gb(espera['b'])}")
     print("\nTandas:")
     for t in conn.execute("SELECT * FROM tandas ORDER BY id"):
         print(f"  {t['id']:>3} {t['tipo']:<5} {t['inicio']} → {t['fin'] or 'SIN TERMINAR'}  "
