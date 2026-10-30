@@ -40,6 +40,6 @@ interface DriveApi {
 }
 
 object DriveApis {
-    /** Implementación con OkHttp + kotlinx.serialization. La rellena el frente «auth». */
-    fun rest(tokens: TokenProvider): DriveApi = TODO("sonda/drive")
+    /** Implementación con OkHttp + kotlinx.serialization ([DriveRestApi]), con trazas en logcat (tag "Sonda"). */
+    fun rest(tokens: TokenProvider): DriveApi = DriveRestApi(tokens, log = SondaLog::i)
 }
