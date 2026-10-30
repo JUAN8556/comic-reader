@@ -51,7 +51,7 @@ data class SeriesMeta(
 )
 
 interface MetadataRepository {
-    /** Baja .indice/* si cambió (por md5/headRevisionId) y lo carga; silencioso si no existe. */
+    /** Baja los ficheros de .indice si cambiaron (por md5/headRevisionId) y lo carga; silencioso si no existe. */
     suspend fun refreshFromDrive(): Result<Unit>
     fun entryFor(book: Book): IndexEntry?
     /** Ficha de la serie a la que pertenece una carpeta (ruta de carpeta en Drive), o null. */
