@@ -10,7 +10,9 @@ import kotlinx.coroutines.launch
 import mx.jano.comics.AppGraph
 import mx.jano.comics.cache.Availability
 import mx.jano.comics.library.Book
+import mx.jano.comics.library.JsonProgressStore
 import mx.jano.comics.library.ReadState
+import mx.jano.comics.library.ReadingProgress
 import mx.jano.comics.ui.library.LibraryFilter
 
 /**
@@ -21,15 +23,41 @@ class UiActions(private val graph: AppGraph, private val scope: CoroutineScope, 
     private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val messages: SharedFlow<String> = _messages.asSharedFlow()
 
+    /**
+     * Lo pone MainActivity: pide el permiso de notificaciones (Android 13+) si aún no lo hay. Se llama antes de fijar,
+     * porque el progreso de los fijados va en una notificación; sin el permiso se bajan igual.
+     */
+    @Volatile var requestNotificationPermission: (() -> Unit)? = null
+
+    /** Lo que se copió a Drive por última vez en esta sesión: no se vuelve a subir si no cambió nada. */
+    @Volatile private var lastBackedUp: Map<String, ReadingProgress>? = null
+
     fun say(message: String) {
         _messages.tryEmit(message)
     }
 
-    /** Vuelve a escanear Drive y, después, relee .indice (fichas y portadas) por si la migración los cambió. */
+    /**
+     * Vuelve a escanear Drive y, después, relee .indice (fichas y portadas) por si la migración los cambió. Las
+     * portadas del índice (un zip de cientos de MB la primera vez) solo con Wi-Fi.
+     */
     fun rescan() = run(UiStrings.ERR_SCAN, quiet = true) {
         graph.library.rescan()
         runCatching { graph.metadata.refreshFromDrive() }
-        runCatching { graph.covers.importIndexCovers() }
+        if (graph.transfers.isUnmetered.value) runCatching { graph.covers.importIndexCovers() }
+    }
+
+    /**
+     * Al ir a segundo plano: escribe ya el progreso pendiente y, con red y si cambió desde la última copia de esta
+     * sesión, lo copia en el appDataFolder de Drive. Sin avisos: un fallo (sin red, sin el permiso drive.appdata)
+     * solo queda en el registro, y la próxima vez se reintenta.
+     */
+    fun onAppStopped() = run(UiStrings.ERR_BACKUP, quiet = true) {
+        (graph.progress as? JsonProgressStore)?.flush()
+        val snapshot = graph.progress.all.value
+        if (snapshot.isEmpty() || snapshot == lastBackedUp || !graph.transfers.isOnline.value) return@run
+        graph.progress.backupToDrive().getOrThrow()
+        lastBackedUp = snapshot
+        prefs.update { it.copy(lastBackupAt = System.currentTimeMillis()) }
     }
 
     /**
@@ -50,6 +78,7 @@ class UiActions(private val graph: AppGraph, private val scope: CoroutineScope, 
 
     fun pin(books: List<Book>) = run(UiStrings.ERR_PIN) {
         if (books.isEmpty()) return@run
+        requestNotificationPermission?.invoke()
         val missing = graph.pins.pin(books)
         say(UiStrings.msgPinned(books.size, missing))
     }
@@ -88,7 +117,9 @@ class UiActions(private val graph: AppGraph, private val scope: CoroutineScope, 
     }
 
     fun backup() = run(UiStrings.ERR_BACKUP) {
+        val snapshot = graph.progress.all.value
         graph.progress.backupToDrive().getOrThrow()
+        lastBackedUp = snapshot
         prefs.update { it.copy(lastBackupAt = System.currentTimeMillis()) }
         say(UiStrings.SET_BACKUP_DONE)
     }

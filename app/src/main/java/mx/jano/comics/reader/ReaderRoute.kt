@@ -31,6 +31,7 @@ import mx.jano.comics.archive.ComicArchives
 import mx.jano.comics.cache.Availability
 import mx.jano.comics.cache.DownloadProgress
 import mx.jano.comics.library.Book
+import mx.jano.comics.library.DriveCoverStore
 import mx.jano.comics.library.Naming
 import mx.jano.comics.settings.ReaderSettings
 import mx.jano.comics.settings.ThemeMode
@@ -122,6 +123,10 @@ private fun ReaderRouteContent(
         // Con el libro ya en disco, que la caché respete su tope sin tocar este libro ni el siguiente.
         val protect = setOfNotNull(book.id, next?.id)
         ReaderScope.launch { runCatching { graph.cache.enforceLimits(protect) } }
+        // Sin portada todavía (PDF y 7z no se pueden sacar por prefijo en Drive): se hace con el archivo ya bajado.
+        if (cover == null) {
+            ReaderScope.launch { runCatching { (graph.covers as? DriveCoverStore)?.coverFromLocalFile(book, file) } }
+        }
 
         state = RouteState.Opening
         var opened: ComicArchive? = null

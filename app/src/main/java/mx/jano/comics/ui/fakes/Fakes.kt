@@ -190,7 +190,15 @@ class FakeProgressStore(initial: Map<String, ReadingProgress> = emptyMap()) : Pr
 
     override suspend fun setFinished(books: List<Book>, finished: Boolean) = books.forEach { setFinished(it, finished, null) }
     override fun recent(limit: Int): List<ReadingProgress> = _all.value.values.sortedByDescending { it.updatedAt }.take(limit)
-    override suspend fun backupToDrive(): Result<Unit> = Result.success(Unit)
+    /** Copias pedidas a Drive (para las pruebas de la copia al ir a segundo plano). */
+    var backups = 0
+        private set
+
+    override suspend fun backupToDrive(): Result<Unit> {
+        backups++
+        return Result.success(Unit)
+    }
+
     override suspend fun restoreFromDrive(): Result<Int> = Result.success(_all.value.size)
 }
 

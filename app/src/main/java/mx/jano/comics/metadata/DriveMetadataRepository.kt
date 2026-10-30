@@ -9,6 +9,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import mx.jano.comics.library.Book
 import mx.jano.comics.library.SmartNames
 import mx.jano.comics.settings.PathKeys
@@ -26,7 +28,7 @@ internal class MetadataData(
     val entriesByMd5: Map<String, List<IndexEntry>> = entries.filter { !it.md5.isNullOrBlank() }.groupBy { it.md5!!.lowercase() }
     val seriesByPath: Map<String, SeriesMeta> = series.associateBy { PathKeys.normalize(it.ruta) }
     val entryCount: Int = entries.size
-    val seriesCount: Int = series.size
+    val seriesCount: Int = seriesByPath.size
 
     companion object {
         val EMPTY = MetadataData(emptyList(), emptyList(), null, 0)
@@ -137,7 +139,9 @@ class DriveMetadataRepository internal constructor(
             loadedFlag = false
             return
         }
-        val entries = indice?.let { readText(it) }?.let { TolerantJson.parseLines(it, IndexEntry.serializer()) }
+        val indiceText = indice?.let { readText(it) }
+        val entries = indiceText?.let { TolerantJson.parseLines(it, IndexEntry.serializer()) }
+        val fromIndex = indiceText?.let { seriesFromIndex(it) }.orEmpty()
         val metas = series?.let { readText(it) }?.let { TolerantJson.parseLines(it, SeriesMeta.serializer()) }
         val tax = taxonomy?.let { readText(it) }?.let {
             try {
@@ -148,9 +152,13 @@ class DriveMetadataRepository internal constructor(
             }
         }
         val skipped = (entries?.skipped ?: 0) + (metas?.skipped ?: 0)
-        data = MetadataData(entries?.items.orEmpty(), metas?.items.orEmpty(), tax, skipped)
+        // Las de series.jsonl van detrás: si una casa con una carpeta de Drive, gana sobre la sacada del índice.
+        data = MetadataData(entries?.items.orEmpty(), fromIndex + metas?.items.orEmpty(), tax, skipped)
         loadedFlag = true
-        log("metadatos: ${entries?.items?.size ?: 0} ficheros, ${metas?.items?.size ?: 0} series, $skipped líneas saltadas")
+        log(
+            "metadatos: ${entries?.items?.size ?: 0} ficheros, ${metas?.items?.size ?: 0} series " +
+                "(${fromIndex.size} carpetas con ficha desde el índice), $skipped líneas saltadas",
+        )
     }
 
     private fun readText(file: File): String? = try {
@@ -163,5 +171,32 @@ class DriveMetadataRepository internal constructor(
     companion object {
         /** Más números que esto en una serie es un dato erróneo: no se calculan huecos. */
         const val MAX_TOTAL = 5000
+
+        /**
+         * Fichas por carpeta de Drive sacadas del campo `meta_serie` de indice.jsonl. La migración escribe la `ruta` de
+         * series.jsonl con la carpeta de ORIGEN (iCloud), que no coincide con la de Drive (Categoría/Editorial/Serie);
+         * cada línea del índice lleva la ficha de su serie, así que su carpeta de Drive es la del cómic. Manda la
+         * primera línea de cada carpeta; una ficha rota se salta (lectura tolerante, como el resto).
+         */
+        internal fun seriesFromIndex(text: String): List<SeriesMeta> {
+            val seen = HashSet<String>()
+            val out = ArrayList<SeriesMeta>()
+            text.lineSequence().forEach { raw ->
+                val line = raw.trim().removePrefix("\uFEFF")
+                if (line.isEmpty() || "meta_serie" !in line) return@forEach
+                val obj = try {
+                    TolerantJson.json.parseToJsonElement(line) as? JsonObject
+                } catch (_: Exception) {
+                    null
+                } ?: return@forEach
+                val ruta = (obj["ruta"] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: return@forEach
+                val meta = obj["meta_serie"] as? JsonObject ?: return@forEach
+                val folder = PathKeys.parent(PathKeys.normalize(ruta))?.takeIf { it.isNotEmpty() } ?: return@forEach
+                if (!seen.add(folder)) return@forEach
+                val withPath = JsonObject(meta + ("ruta" to JsonPrimitive(folder)))
+                TolerantJson.decodeObject(withPath, SeriesMeta.serializer())?.let(out::add)
+            }
+            return out
+        }
     }
 }

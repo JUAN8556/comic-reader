@@ -1,6 +1,7 @@
 package mx.jano.comics.ui
 
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -11,10 +12,38 @@ import mx.jano.comics.ui.fakes.FakeAppGraph
 import mx.jano.comics.ui.library.LibraryFilter
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class UiActionsTest {
+    /** Al ir a segundo plano se copia el progreso a Drive solo si cambió desde la última copia, y solo con red. */
+    @Test fun backupOnStopOnlyWhenChangedAndOnline() = runTest {
+        val graph = FakeAppGraph()
+        val prefs = UiPrefsStore(null)
+        val actions = UiActions(graph, this, prefs)
+        actions.onAppStopped()
+        advanceUntilIdle()
+        assertEquals(1, graph.progress.backups)
+        assertNotNull(prefs.state.value.lastBackupAt)
+        actions.onAppStopped()
+        advanceUntilIdle()
+        assertEquals(1, graph.progress.backups)
+        graph.progress.update(graph.library.book("xmen-b2")!!, 5, 24)
+        actions.onAppStopped()
+        advanceUntilIdle()
+        assertEquals(2, graph.progress.backups)
+
+        val offline = FakeAppGraph(online = false)
+        val offlinePrefs = UiPrefsStore(null)
+        UiActions(offline, this, offlinePrefs).onAppStopped()
+        advanceUntilIdle()
+        assertEquals(0, offline.progress.backups)
+        assertNull(offlinePrefs.state.value.lastBackupAt)
+    }
+
     @Test fun markUnreadAlsoResetsThePage() = runTest {
         val graph = FakeAppGraph()
         val actions = UiActions(graph, this, UiPrefsStore(null))

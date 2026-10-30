@@ -28,6 +28,9 @@ data class MenuFacts(
     val anyPinned: Boolean,
     val localCount: Int,            // descargados o fijados
     val rtl: Boolean,               // sentido efectivo ahora
+    /** Lo fijado para ESTE libro o carpeta: true/false, null = hereda; [rtlKnown] false si el almacén no lo dice. */
+    val rtlExplicit: Boolean? = null,
+    val rtlKnown: Boolean = false,
 )
 
 /** Lo que el menú puede pedir. */
@@ -77,9 +80,11 @@ fun ItemMenu(expanded: Boolean, onDismiss: () -> Unit, facts: MenuFacts, actions
             onClick = {},
             enabled = false,
         )
-        Item(UiStrings.MENU_RTL_ON, null, pick { actions.setRtl(true) })
-        Item(UiStrings.MENU_RTL_OFF, null, pick { actions.setRtl(false) })
-        Item(UiStrings.MENU_RTL_INHERIT, null, pick { actions.setRtl(null) })
+        // La opción fijada lleva la marca (icono, no solo color); sin dato del almacén, ninguna.
+        fun mark(chosen: Boolean): ImageVector? = if (facts.rtlKnown && chosen) Icons.Filled.Check else null
+        Item(UiStrings.MENU_RTL_ON, mark(facts.rtlExplicit == true), pick { actions.setRtl(true) })
+        Item(UiStrings.MENU_RTL_OFF, mark(facts.rtlExplicit == false), pick { actions.setRtl(false) })
+        Item(UiStrings.MENU_RTL_INHERIT, mark(facts.rtlExplicit == null), pick { actions.setRtl(null) })
         HorizontalDivider()
         Item(UiStrings.MENU_SERIES, Icons.Filled.Info, pick(actions.openSeries))
     }

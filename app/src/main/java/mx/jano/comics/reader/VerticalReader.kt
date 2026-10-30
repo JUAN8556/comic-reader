@@ -160,7 +160,7 @@ internal fun VerticalReader(
                 },
         ) {
             items(count = pageCount, key = { it }) { index ->
-                VerticalPageItem(index, pageCount, loader, sizes[index] ?: loader.sizes.value[index], viewport)
+                VerticalPageItem(index, pageCount, loader, sizes[index], viewport)
             }
             if (endPage != null) {
                 item(key = "fin") {

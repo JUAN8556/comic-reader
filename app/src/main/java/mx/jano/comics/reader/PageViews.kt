@@ -143,7 +143,7 @@ internal fun SpreadPage(
     if (spread.isDouble) {
         DoubleSpreadContent(spread, pageCount, loader, firstSize, secondSize, fit, rtl, viewport, zoomState, isSettled, onTap)
     } else {
-        val size = firstSize ?: loader.sizes.value[spread.first]
+        val size = firstSize
         val spec = FitResolver.resolve(fit, rtl, size?.let { PxSize(it.width, it.height) }, viewport)
         SinglePageContent(spread.first, pageCount, loader, spec, zoomState, isSettled, onTap)
     }

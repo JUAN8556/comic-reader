@@ -28,7 +28,7 @@ internal object TolerantJson {
         val out = ArrayList<T>()
         var skipped = 0
         text.lineSequence().forEach { raw ->
-            val line = raw.trim().removePrefix("﻿")
+            val line = raw.trim().removePrefix("\uFEFF")
             if (line.isEmpty()) return@forEach
             val item = decodeLine(line, serializer)
             if (item == null) skipped++ else out += item

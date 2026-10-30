@@ -212,6 +212,39 @@ class MetadataRepositoryTest {
         assertTrue(r.missingNumbers(folder, listOf(book("$folder/Especial.cbr"))).isEmpty())
     }
 
+    /** series.jsonl de la migración lleva la ruta de ORIGEN (iCloud); la ficha llega a Drive por `meta_serie`. */
+    @Test fun ficha_desde_meta_serie_del_indice() = runBlocking {
+        val drive = FakeDrive().apply {
+            files["indice.jsonl"] = "m1" to """
+                {"ruta":"Americano/Marvel/Hulk - La Caída del Panteón/Hulk - La Caída del Panteón 01.cbr","numero":"01","meta_serie":{"titulo":"Hulk: La caída del Panteón","numeros_totales":4,"guion":"Guionista Uno"}}
+                {"ruta":"Americano/Marvel/Hulk - La Caída del Panteón/Hulk - La Caída del Panteón 03.cbr","numero":"03","meta_serie":{"titulo":"otra línea de la misma carpeta: no manda"}}
+                {"ruta":"Manga/Naruto/Naruto - Tomo 6.cbr","numero":"6","meta_serie":{"titulo":"Naruto (índice)","numeros_totales":"mal"}}
+                {"ruta":"suelto.cbr","meta_serie":{"titulo":"en la raíz: sin carpeta"}}
+                {"ruta":"Manga/Roto/1.cbr","meta_serie":"no es un objeto"}
+            """.trimIndent()
+            // La ruta de series.jsonl es la de iCloud: no casa con ninguna carpeta de Drive salvo Naruto.
+            files["series.jsonl"] = "m2" to """
+                {"ruta":"Marvel/Hulk La Caida Del Panteon (Forum)","titulo":"Hulk: La caída del Panteón"}
+                {"ruta":"Manga/Naruto","titulo":"Naruto","numeros_totales":72}
+            """.trimIndent()
+        }
+        val r = repo(drive)
+        r.refreshFromDrive().getOrThrow()
+        val folder = "Americano/Marvel/Hulk - La Caída del Panteón"
+        val hulk = r.seriesFor(folder)!!
+        assertEquals("Hulk: La caída del Panteón", hulk.titulo)
+        assertEquals(listOf("Guionista Uno"), hulk.guion)
+        assertEquals(4, hulk.numeros_totales)
+        val books = listOf(book("$folder/Hulk - La Caída del Panteón 01.cbr"), book("$folder/Hulk - La Caída del Panteón 03.cbr"))
+        assertEquals(listOf(2, 4), r.missingNumbers(folder, books))
+        // Si series.jsonl casa con la carpeta de Drive, gana sobre la del índice.
+        assertEquals("Naruto", r.seriesFor("Manga/Naruto")?.titulo)
+        assertEquals(72, r.seriesFor("Manga/Naruto")?.numeros_totales)
+        assertNull(r.seriesFor("Manga/Roto"))
+        assertNull(r.seriesFor(""))
+        assertEquals(3, r.seriesCount) // carpetas con ficha: Hulk y Naruto de Drive, y la de iCloud que no casa con nada
+    }
+
     @Test fun lineas_tolerantes_puras() {
         assertNull(TolerantJson.decodeLine("{roto", IndexEntry.serializer()))
         assertNull(TolerantJson.decodeLine("""{"md5":"x"}""", IndexEntry.serializer()))
@@ -221,7 +254,7 @@ class MetadataRepositoryTest {
         val e = TolerantJson.decodeLine("""{"ruta":"a","paginas":[12],"serie":null,"tipo":"ZIP"}""", IndexEntry.serializer())!!
         assertEquals(12, e.paginas)
         assertEquals("ZIP", e.tipo)
-        val parsed = TolerantJson.parseLines("﻿{\"ruta\":\"x\"}\n\n{\"ruta\":\"y\"}\r\nbasura", IndexEntry.serializer())
+        val parsed = TolerantJson.parseLines("\uFEFF{\"ruta\":\"x\"}\n\n{\"ruta\":\"y\"}\r\nbasura", IndexEntry.serializer())
         assertEquals(listOf("x", "y"), parsed.items.map { it.ruta })
         assertEquals(1, parsed.skipped)
         assertEquals(12, TolerantJson.firstInt("012.5"))

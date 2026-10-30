@@ -8,22 +8,24 @@ import java.util.Locale
 /** Formatos de la interfaz en español (coma decimal, «1.234»). Puros: con pruebas JVM. */
 object UiFormat {
     private val es: Locale = Locale.forLanguageTag("es-ES")
-    private const val KIB = 1024L
-    private const val MIB = KIB * 1024
-    private const val GIB = MIB * 1024
+    // Unidades decimales, como los Ajustes de Android y el tope de la caché (CacheStrings: 1 GB = 10^9 bytes): así
+    // «usado» y «tope» se comparan en la misma unidad.
+    private const val KB = 1000L
+    private const val MB = KB * 1000
+    private const val GB = MB * 1000
 
     fun count(n: Int): String = String.format(es, "%,d", n)
 
     fun comics(n: Int): String = if (n == 1) "1 cómic" else "${count(n)} cómics"
 
-    /** Bytes en KB / MB / GB (base 1024, como el tope de caché en GB). */
+    /** Bytes en KB / MB / GB (base 1000, como el tope de caché en GB). */
     fun bytes(n: Long): String = when {
         n < 0 -> "?"
-        n < MIB -> "${(n + KIB - 1) / KIB} KB"
-        n < 10 * MIB -> String.format(es, "%.1f MB", n.toDouble() / MIB)
-        n < GIB -> "${n / MIB} MB"
-        n < 100 * GIB -> String.format(es, "%.1f GB", n.toDouble() / GIB)
-        else -> "${n / GIB} GB"
+        n < MB -> "${(n + KB - 1) / KB} KB"
+        n < 10 * MB -> String.format(es, "%.1f MB", n.toDouble() / MB)
+        n < GB -> "${n / MB} MB"
+        n < 100 * GB -> String.format(es, "%.1f GB", n.toDouble() / GB)
+        else -> "${n / GB} GB"
     }
 
     fun seconds(ms: Long): String = if (ms < 10_000) String.format(es, "%.1f s", ms / 1000.0) else "${ms / 1000} s"

@@ -73,6 +73,7 @@ import mx.jano.comics.cache.Availability
 import mx.jano.comics.library.Book
 import mx.jano.comics.library.Folder
 import mx.jano.comics.library.ScanState
+import mx.jano.comics.settings.JsonSettingsStore
 import mx.jano.comics.ui.LocalUiEnv
 import mx.jano.comics.ui.UiEnv
 import mx.jano.comics.ui.UiStrings
@@ -349,6 +350,8 @@ private fun bookFacts(graph: AppGraph, book: Book, pins: Set<String>): MenuFacts
         anyPinned = book.id in pins,
         localCount = if (availability == Availability.CLOUD) 0 else 1,
         rtl = runCatching { graph.settings.rtlFor(book.path) }.getOrDefault(false),
+        rtlExplicit = (graph.settings as? JsonSettingsStore)?.rtlOverride(book.path),
+        rtlKnown = graph.settings is JsonSettingsStore,
     )
 }
 
@@ -361,6 +364,13 @@ private fun folderFacts(graph: AppGraph, tile: FolderTile, pins: Set<String>): M
         anyPinned = under.any { it.id in pins },
         localCount = under.count { runCatching { graph.cache.availability(it) }.getOrNull().let { a -> a != null && a != Availability.CLOUD } },
         rtl = runCatching { graph.settings.rtlFor(tile.folder.path) }.getOrDefault(false),
+        // En la raíz no hay «heredar»: su valor es el ajuste global (así lo escribe UiActions.setRtl).
+        rtlExplicit = if (tile.folder.path.isEmpty()) {
+            graph.settings.reader.value.rtlGlobal
+        } else {
+            (graph.settings as? JsonSettingsStore)?.rtlOverride(tile.folder.path)
+        },
+        rtlKnown = tile.folder.path.isEmpty() || graph.settings is JsonSettingsStore,
     )
 }
 

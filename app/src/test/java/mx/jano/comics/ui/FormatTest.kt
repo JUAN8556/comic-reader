@@ -6,18 +6,19 @@ import org.junit.Test
 import java.time.ZoneOffset
 
 class FormatTest {
-    private val mib = 1024L * 1024
-    private val gib = mib * 1024
+    private val mb = 1_000_000L
+    private val gb = mb * 1000
 
+    /** Unidades decimales, como el tope de la caché: 20 GB de caché llena se leen «20,0 GB», no «18,6 GB». */
     @Test fun bytesInSpanish() {
         assertEquals("0 KB", UiFormat.bytes(0))
         assertEquals("1 KB", UiFormat.bytes(1))
-        assertEquals("512 KB", UiFormat.bytes(512 * 1024))
-        assertEquals("3,5 MB", UiFormat.bytes(3 * mib + mib / 2))
-        assertEquals("120 MB", UiFormat.bytes(120 * mib))
-        assertEquals("3,2 GB", UiFormat.bytes((3.2 * gib).toLong()))
-        assertEquals("20,0 GB", UiFormat.bytes(20 * gib))
-        assertEquals("150 GB", UiFormat.bytes(150 * gib))
+        assertEquals("512 KB", UiFormat.bytes(512_000))
+        assertEquals("3,5 MB", UiFormat.bytes(3 * mb + mb / 2))
+        assertEquals("120 MB", UiFormat.bytes(120 * mb))
+        assertEquals("3,2 GB", UiFormat.bytes((3.2 * gb).toLong()))
+        assertEquals("20,0 GB", UiFormat.bytes(20 * gb))
+        assertEquals("150 GB", UiFormat.bytes(150 * gb))
         assertEquals("?", UiFormat.bytes(-1))
     }
 

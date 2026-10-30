@@ -192,7 +192,7 @@ object UiStrings {
     const val SET_CLEAR_CACHE = "Vaciar caché"
     const val SET_CLEAR_CACHE_TITLE = "¿Vaciar la caché?"
     const val SET_CLEAR_CACHE_BODY =
-        "Se borran de la tablet todos los cómics descargados, también los fijados. El progreso de lectura no se toca."
+        "Se borran de la tablet los cómics descargados, salvo los fijados (para borrar uno fijado, quita antes el fijado). El progreso de lectura no se toca."
     const val SET_CLEAR_CACHE_DONE = "Caché vaciada"
     const val SET_LIBRARY = "Biblioteca"
     fun setRoot(name: String?) = "Carpeta raíz: " + (name ?: "sin elegir")

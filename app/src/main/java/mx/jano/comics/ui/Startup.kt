@@ -2,15 +2,19 @@ package mx.jano.comics.ui
 
 import android.util.Log
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import mx.jano.comics.auth.NeedsConsentException
+import mx.jano.comics.library.DriveLibraryRepository
 import mx.jano.comics.library.LibraryIndex
 import mx.jano.comics.ui.nav.Screen
 
 /**
  * Tareas al abrir la biblioteca de una raíz (una vez por proceso y raíz): token en silencio (si hace falta pantalla,
- * vuelve al primer arranque), escaneo si el índice falta, es de otra raíz o es viejo, y después la ficha de series y
- * las portadas del índice. Sin red no pasa nada: la biblioteca sigue con el índice local.
+ * vuelve al primer arranque), progreso de Drive mezclado con el local, escaneo si el índice falta, es de otra raíz o
+ * es viejo, y después la ficha de series y (solo con Wi-Fi) las portadas del índice. Sin red no pasa nada: la
+ * biblioteca sigue con el índice local.
  */
 object Startup {
     /** Un índice de más de 6 h se refresca solo al arrancar (Drive cambia cuando la migración sube cosas). */
@@ -39,16 +43,30 @@ object Startup {
             } catch (t: Throwable) {
                 Log.i(TAG, "arranque sin token (${t.javaClass.simpleName}): se sigue con el índice local")
             }
+            // La copia de Drive se mezcla con la local (gana la más reciente de cada número): tras reinstalar, el
+            // progreso vuelve solo; en el día a día no cambia nada. Sin el permiso drive.appdata falla en silencio.
+            quietly("progreso de Drive") { graph.progress.restoreFromDrive().getOrThrow() }
+            // index.json se carga de disco en segundo plano: sin esperarlo, cada arranque parecería «sin índice».
+            (graph.library as? DriveLibraryRepository)?.let { repo ->
+                withTimeoutOrNull(DISK_INDEX_WAIT_MS) { repo.diskLoaded.first { it } }
+            }
             val index = graph.library.index.value
             val usable = index != null && index.rootId == rootId
             if (needsRescan(index, rootId, System.currentTimeMillis()) && (!usable || graph.transfers.isOnline.value)) {
                 quietly("escaneo") { graph.library.rescan() }
                 env.covers.forgetFailures()
             }
-            quietly("índice de series") { graph.metadata.refreshFromDrive() }
-            quietly("portadas del índice") { graph.covers.importIndexCovers() }
+            quietly("índice de series") { graph.metadata.refreshFromDrive().getOrThrow() }
+            // portadas.zip son cientos de MB la primera vez (después, solo si cambió): con Wi-Fi.
+            if (graph.transfers.isUnmetered.value) {
+                quietly("portadas del índice") { graph.covers.importIndexCovers() }
+                env.covers.forgetFailures()
+            }
         }
     }
+
+    /** Lo más que se espera a que index.json termine de cargarse de disco antes de decidir si hay que escanear. */
+    private const val DISK_INDEX_WAIT_MS = 10_000L
 
     private suspend fun quietly(what: String, block: suspend () -> Unit) {
         try {
