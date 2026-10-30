@@ -51,7 +51,7 @@ if [[ ! -x "$REPO/gradlew" ]]; then
   log "gradle wrapper $GV"
   TMP=$(mktemp -d); cd "$TMP"
   curl -fsSLO "https://services.gradle.org/distributions/gradle-$GV-bin.zip"
-  SHA=$(curl -fsS "https://services.gradle.org/distributions/gradle-$GV-bin.zip.sha256")
+  SHA=$(curl -fsSL "https://services.gradle.org/distributions/gradle-$GV-bin.zip.sha256" | tr -d "[:space:]")
   echo "$SHA  gradle-$GV-bin.zip" | shasum -a 256 -c - >/dev/null || { log "SHA-256 de gradle NO coincide"; exit 1; }
   unzip -q "gradle-$GV-bin.zip"
   cd "$REPO"

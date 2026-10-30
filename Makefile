@@ -7,6 +7,8 @@ export PATH         := $(JAVA_HOME)/bin:$(ANDROID_HOME)/platform-tools:$(ANDROID
 APP_ID        := mx.jano.comics
 KEYSTORE      := $(HOME)/.android/comics.jks
 KEYSTORE_SVC  := comics-keystore
+# contraseña del keystore: del llavero de macOS a Gradle por variable de entorno, en cada receta
+export COMICS_KEYSTORE_PASS = $(shell security find-generic-password -s $(KEYSTORE_SVC) -a comics -w 2>/dev/null)
 TOOLKIT       := $(HOME)/nxtpaper-toolkit
 DEVICE_CONF   := $(TOOLKIT)/config/device.conf
 SERIAL         = $(shell sed -n 's/^DEVICE_SERIAL="\(.*\)"/\1/p' $(DEVICE_CONF) 2>/dev/null)
