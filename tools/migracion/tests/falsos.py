@@ -2,6 +2,15 @@
 
 «Drive» es una carpeta local (FAKE_DRIVE); el remoto «gdrive:Cómics/x» es FAKE_DRIVE/Cómics/x.
 El evict falso apunta en FAKE_EVICT qué rutas «desalojó» y, con --estado, dice 0 bloques para ellas.
+
+Averías a demanda (variables de entorno):
+  FAKE_FALLA=copy[,about…][,caer]  esas órdenes fallan sin hacer nada; con «caer», tras fallar
+                                   «se cae la red»: existe FAKE_DRIVE/caido y fallan todas
+  FAKE_CORROMPER=<texto>           copy/copyto escriben con un byte cambiado (mismo tamaño y
+                                   fecha) los destinos que contienen <texto>
+  FAKE_EVICT_FALLA=<texto>         evict falla en las rutas que contienen <texto>
+Como el rclone de verdad, «copy» se salta un destino con el mismo tamaño y fecha (salvo con
+--ignore-times), y conserva la fecha del origen.
 """
 
 import os
@@ -31,6 +40,32 @@ while i < len(args):
         i += 1
 with open(os.path.join(DRIVE, "llamadas.log"), "a") as f:
     f.write(" ".join(args) + "\n")
+FALLA = {x for x in os.environ.get("FAKE_FALLA", "").split(",") if x}
+CAIDO = os.path.join(DRIVE, "caido")
+RED = ("about", "copy", "copyto", "lsjson", "lsl", "md5sum")
+if cmd in RED and os.path.exists(CAIDO):
+    print("Failed to create file system: dial tcp: lookup www.googleapis.com: no such host", file=sys.stderr)
+    sys.exit(1)
+if cmd in FALLA:
+    print(f"2026/10/30 02:00:00 ERROR : {cmd}: googleapi: Error 503: Service Unavailable", file=sys.stderr)
+    if "caer" in FALLA:
+        open(CAIDO, "w").close()
+    sys.exit(1)
+def escribir(origen, destino, forzar):
+    if not forzar and os.path.exists(destino) and os.path.getsize(destino) == os.path.getsize(origen) \
+            and abs(os.path.getmtime(destino) - os.path.getmtime(origen)) < 0.001:
+        return False
+    os.makedirs(os.path.dirname(destino), exist_ok=True)
+    shutil.copy2(origen, destino)
+    marca = os.environ.get("FAKE_CORROMPER")
+    if marca and marca in destino:
+        with open(destino, "r+b") as f:
+            f.seek(os.path.getsize(destino) // 2)
+            b = f.read(1)
+            f.seek(-1, 1)
+            f.write(bytes([b[0] ^ 0xFF]))
+        shutil.copystat(origen, destino)
+    return True
 def local(remoto):
     if ":" in remoto and not remoto.startswith("/"):
         return os.path.join(DRIVE, remoto.split(":", 1)[1])
@@ -71,15 +106,11 @@ elif cmd == "copy":
     else:
         lista = [r for r in ficheros(src) if not r.endswith(".tmp")]
     for rel in lista:
-        d = os.path.join(dst, rel)
-        os.makedirs(os.path.dirname(d), exist_ok=True)
-        shutil.copyfile(os.path.join(src, rel), d)
-        print(f"2026/10/30 02:00:00 INFO  : {rel}: Copied (new)", file=sys.stderr)
+        if escribir(os.path.join(src, rel), os.path.join(dst, rel), "--ignore-times" in opt):
+            print(f"2026/10/30 02:00:00 INFO  : {rel}: Copied (new)", file=sys.stderr)
     print("2026/10/30 02:00:01 NOTICE: 1 MiB / 1 MiB, 100%, 1 MiB/s, ETA 0s", file=sys.stderr)
 elif cmd == "copyto":
-    d = local(pos[1])
-    os.makedirs(os.path.dirname(d), exist_ok=True)
-    shutil.copyfile(pos[0], d)
+    escribir(pos[0], local(pos[1]), "--ignore-times" in opt)
 elif cmd == "lsjson":
     base = local(pos[0])
     out = []
@@ -110,9 +141,12 @@ if args and args[0] == "--estado":
     for p in args[1:]:
         print(f"estado\t{p}\tsi\t{'no_descargado' if p in hechos else 'actual'}\t{0 if p in hechos else 8}")
     sys.exit(0)
+falla = os.environ.get("FAKE_EVICT_FALLA")
 with open(reg, "a", encoding="utf-8") as f:
     for p in args:
-        if os.path.exists(p):
+        if falla and falla in p:
+            print(f"error\t{p}\tThe operation couldn't be completed. (NSCocoaErrorDomain error 256.)")
+        elif os.path.exists(p):
             f.write(p + "\n")
             print(f"ok\t{p}")
         else:

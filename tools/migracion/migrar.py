@@ -696,6 +696,31 @@ def cuota(cfg: Config, log: Registro) -> dict:
     return json.loads(out)
 
 
+def sonda_drive(cfg: Config, log: Registro) -> tuple[int | None, str]:
+    """(bytes libres en Drive, error): None si Drive no responde (sin red, token caducado…)."""
+    rc, out, err = rclone(["about", cfg.cuenta, "--json"], log, timeout=120)
+    if rc == 0:
+        try:
+            return int(json.loads(out).get("free", 0)), ""
+        except (ValueError, AttributeError, TypeError):
+            return None, "respuesta de rclone about ilegible"
+    return None, (err or "").strip()[-200:] or f"rclone about salió con {rc}"
+
+
+def comprobar_drive_lote(cfg: Config, log: Registro, peso: int):
+    """Antes de materializar un lote: que Drive responda y que el lote quepa sin tocar la
+    reserva. Si no, PARADA con la tanda abierta: no se baja de iCloud lo que no se puede subir."""
+    libre, err = sonda_drive(cfg, log)
+    if libre is None:
+        raise SystemExit(f"PARADA: Drive no responde ({err}).\nNo materializo nada más de iCloud. "
+                         "La tanda queda abierta: cuando vuelva la conexión, «make migrar» la reanuda.")
+    reserva = int(cfg.reserva_gib * GiB)
+    if libre - peso < reserva:
+        raise SystemExit(f"PARADA: a Drive le quedan {gib(libre)} libres; este lote ({gb(peso, 2)}) bajaría "
+                         f"de la reserva de {num(cfg.reserva_gib)} GiB.\nLa tanda queda abierta: libera "
+                         "espacio en Drive o amplía Google One (docs/MIGRACION.md) y relanza «make migrar».")
+
+
 def comprobar_cuota(cfg: Config, log: Registro, bytes_tanda: int) -> dict:
     c = cuota(cfg, log)
     libre = int(c.get("free", 0))
@@ -896,19 +921,24 @@ def desalojar(cfg: Config, rutas_abs: list[str]) -> dict[str, str]:
     return res
 
 
-def listar_drive(cfg: Config, log: Registro, carpetas: set[str]) -> dict[str, dict]:
-    """lsjson --hash de cada carpeta de destino: {destino: {md5, tam, id}}."""
-    out = {}
+def listar_drive(cfg: Config, log: Registro, carpetas: set[str]) -> tuple[dict[str, dict], set[str]]:
+    """lsjson --hash de cada carpeta de destino: ({destino: {md5, tam, id}}, carpetas sin listar)."""
+    out, sin_listar = {}, set()
     for c in sorted(carpetas):
         rc, salida, err = rclone(["lsjson", f"{cfg.remoto}/{c}", "--hash", "--hash-type", "md5",
                                   "--files-only"], log, timeout=600)
-        if rc != 0:
+        try:
+            entradas = json.loads(salida or "[]") if rc == 0 else None
+        except ValueError:
+            entradas = None
+        if entradas is None:
             log(f"  aviso: no pude listar {c!r} en Drive: {err.strip()[-200:]}")
+            sin_listar.add(c)
             continue
-        for e in json.loads(salida or "[]"):
+        for e in entradas:
             hashes = {k.lower(): v for k, v in (e.get("Hashes") or {}).items()}
             out[f"{c}/{e['Path']}"] = {"md5": hashes.get("md5"), "tam": e.get("Size"), "id": e.get("ID")}
-    return out
+    return out, sin_listar
 
 
 def procesar(cfg: Config, conn: sqlite3.Connection, log: Registro, tanda_id: int,
@@ -932,6 +962,7 @@ def procesar(cfg: Config, conn: sqlite3.Connection, log: Registro, tanda_id: int
         lotes.append(actual)
     total = len(orden)
     hecho = 0
+    lotes_en_blanco = 0          # lotes seguidos en los que no se pudo verificar nada de lo subido
     for n_lote, lote in enumerate(lotes, 1):
         peso = sum(filas[r]["tamano"] or 0 for r in lote)
         log(f"\n— Lote {n_lote}/{len(lotes)}: {len(lote)} ficheros, {gb(peso, 2)}")
@@ -939,6 +970,10 @@ def procesar(cfg: Config, conn: sqlite3.Connection, log: Registro, tanda_id: int
         if libre - peso < cfg.min_libre_mac_gb * GB:
             raise SystemExit(f"PARADA: en la Mac quedan {gb(libre)} libres; materializar este lote bajaría "
                              f"de {num(cfg.min_libre_mac_gb)} GB. Libera espacio y relanza (se reanuda).")
+        a_subir = sum(filas[r]["tamano"] or 0 for r in lote if filas[r]["estado"] in ("pendiente", "subido"))
+        if a_subir:
+            comprobar_drive_lote(cfg, log, a_subir)
+        parar = None
         # 1. materializar + analizar (en paralelo)
         t0 = time.time()
         por_analizar = [r for r in lote if filas[r]["estado"] == "pendiente"]
@@ -987,7 +1022,7 @@ def procesar(cfg: Config, conn: sqlite3.Connection, log: Registro, tanda_id: int
                 resumen["apartado_duplicado"] += 1
                 log(f"    apartado (duplicado de {nombres.ruta_normalizada(dup['ruta'])}): {fila['ruta_nfc']}")
                 continue
-            ext = formatos.EXT_REAL[res["formato"]]
+            ext = formatos.EXT_REAL.get(res["formato"]) or ext_declarada(os.path.basename(fila["ruta_nfc"]))
             destino = fila["destino"]
             if destino and not destino.endswith(ext):
                 viejo = os.path.splitext(destino)[1]
@@ -1008,7 +1043,7 @@ def procesar(cfg: Config, conn: sqlite3.Connection, log: Registro, tanda_id: int
                     n += 1
                 destino = cand
                 extra = dict(interpretado=0, motivo="choque de nombres: se conserva el nombre limpio")
-            if ext != ext_declarada(os.path.basename(fila["ruta_nfc"])):
+            if res["formato"] in formatos.EXT_REAL and ext != ext_declarada(os.path.basename(fila["ruta_nfc"])):
                 comunes["nota"] = "; ".join(x for x in (comunes.get("nota"),
                                             f"extensión corregida a {ext} (era {res['formato']} disfrazado)") if x)
             actualizar(conn, r, destino=destino, **comunes, **extra)
@@ -1038,21 +1073,27 @@ def procesar(cfg: Config, conn: sqlite3.Connection, log: Registro, tanda_id: int
                                 + RCLONE_SUBIDA, log, mostrar=True)
             tiempos["subir"] = tiempos.get("subir", 0) + time.time() - t0
             tiempos["bytes_subidos"] = tiempos.get("bytes_subidos", 0) + peso_sub
+            limite_diario = rc != 0 and ("upload limit" in err.lower() or "uploadlimit" in err.lower())
             if rc != 0:
                 log(f"  rclone copy terminó con código {rc}; se verifica lo que llegó.")
-                if "upload limit" in err.lower() or "uploadlimit" in err.lower():
-                    log("  Google cortó por el límite diario de subida (750 GB/día). Relanza mañana.")
+                if limite_diario:
+                    log("  Google cortó por el límite diario de subida (750 GB/día).")
             limpiar_subida(cfg)
             # 4. verificar contra Drive
             t0 = time.time()
-            en_drive = listar_drive(cfg, log, {os.path.dirname(destinos[r]) for r in subir})
+            verificados_antes = resumen["verificado"]
+            en_drive, sin_listar = listar_drive(cfg, log, {os.path.dirname(destinos[r]) for r in subir})
             reintentar = []
             for r in subir:
                 fila = conn.execute("SELECT * FROM ficheros WHERE ruta=?", (r,)).fetchone()
                 d = en_drive.get(fila["destino"])
                 if not d:
-                    actualizar(conn, r, error="no aparece en Drive tras la subida")
-                    resumen["no_subido"] += 1
+                    if os.path.dirname(fila["destino"]) in sin_listar:
+                        actualizar(conn, r, error="no se pudo comprobar en Drive (falló el listado)")
+                        resumen["sin_comprobar"] += 1
+                    else:
+                        actualizar(conn, r, error="no aparece en Drive tras la subida")
+                        resumen["no_subido"] += 1
                     continue
                 if d["tam"] != fila["tamano"]:
                     actualizar(conn, r, estado="subido", error=f"tamaño distinto en Drive ({d['tam']})",
@@ -1068,16 +1109,42 @@ def procesar(cfg: Config, conn: sqlite3.Connection, log: Registro, tanda_id: int
                 resumen["verificado"] += 1
             for r in reintentar:
                 fila = conn.execute("SELECT * FROM ficheros WHERE ruta=?", (r,)).fetchone()
+                if limite_diario:
+                    resumen["md5_distinto"] += 1
+                    continue
                 log(f"  Reintento (md5 o tamaño no cuadra): {fila['destino']}")
-                rc, _, _ = rclone(["copyto", os.path.join(cfg.origen, r), f"{cfg.remoto}/{fila['destino']}",
-                                   "--ignore-times"] + RCLONE_SUBIDA, log, mostrar=True)
-                d = listar_drive(cfg, log, {os.path.dirname(fila["destino"])}).get(fila["destino"])
+                rclone(["copyto", os.path.join(cfg.origen, r), f"{cfg.remoto}/{fila['destino']}",
+                        "--ignore-times"] + RCLONE_SUBIDA, log, mostrar=True)
+                d = listar_drive(cfg, log, {os.path.dirname(fila["destino"])})[0].get(fila["destino"])
                 if d and d["md5"] == fila["md5"] and d["tam"] == fila["tamano"]:
                     actualizar(conn, r, estado="verificado", md5_drive=d["md5"], drive_id=d["id"], error=None)
                     resumen["verificado"] += 1
                 else:
                     resumen["md5_distinto"] += 1
             tiempos["verificar"] = tiempos.get("verificar", 0) + time.time() - t0
+            # ¿fallo de un fichero o de todo? Si es de todo, no se sigue bajando iCloud para nada.
+            nuevos = resumen["verificado"] - verificados_antes
+            seguir = "La tanda queda abierta: «make migrar» la reanuda donde se quedó."
+            if limite_diario:
+                parar = ("PARADA: Google cortó por el límite diario de subida (750 GB/día).\n"
+                         + seguir.replace("la reanuda", "mañana la reanuda"))
+            elif sin_listar:
+                parar = (f"PARADA: no pude listar en Drive {num(len(sin_listar))} carpeta(s) para comprobar lo "
+                         f"subido (¿sin conexión?).\n{seguir}")
+            elif nuevos == 0:
+                lotes_en_blanco += 1
+                libre_drive, err_drive = sonda_drive(cfg, log)
+                if libre_drive is None:
+                    parar = f"PARADA: Drive dejó de responder durante la subida ({err_drive}).\n{seguir}"
+                elif lotes_en_blanco >= 2:
+                    ultima = ((err or "").strip().splitlines() or ["sin detalle"])[-1][-200:]
+                    parar = (f"PARADA: dos lotes seguidos sin poder subir y verificar nada (rclone copy: código "
+                             f"{rc}; {ultima}).\nMira el registro {log.ruta}. {seguir}")
+                else:
+                    log("  Aviso: nada de este lote quedó verificado, pero Drive responde: sigo con el "
+                        "siguiente (los de este lote se reintentan en la próxima tanda).")
+            else:
+                lotes_en_blanco = 0
         # 5. desalojar: verificados + apartados que materializamos nosotros
         t0 = time.time()
         a_desalojar = []
@@ -1089,22 +1156,34 @@ def procesar(cfg: Config, conn: sqlite3.Connection, log: Registro, tanda_id: int
                     and fila["tanda"] == tanda_id:
                 a_desalojar.append(r)
         if a_desalojar:
-            res = desalojar(cfg, [os.path.join(cfg.origen, r) for r in a_desalojar])
+            # si iCloud ya no tiene copia local (la desalojó él o una ejecución anterior), no hay nada que liberar
+            ya_fuera = {r for r in a_desalojar if not es_local(os.lstat(os.path.join(cfg.origen, r)))}
+            res = desalojar(cfg, [os.path.join(cfg.origen, r) for r in a_desalojar if r not in ya_fuera])
+            res.update({os.path.join(cfg.origen, r): "ok" for r in ya_fuera})
             for r in a_desalojar:
                 p = os.path.join(cfg.origen, r)
                 st = os.lstat(p)
-                estado = conn.execute("SELECT estado FROM ficheros WHERE ruta=?", (r,)).fetchone()["estado"]
+                fila = conn.execute("SELECT estado, nota FROM ficheros WHERE ruta=?", (r,)).fetchone()
+                estado = fila["estado"]
                 if res.get(p) == "ok":
                     if estado == "verificado":
-                        actualizar(conn, r, estado="desalojado",
+                        actualizar(conn, r, estado="desalojado", error=None,
                                    nota=None if st.st_blocks == 0 else f"evict ok, {st.st_blocks} bloques aún")
                         resumen["desalojado"] += 1
-                else:
+                elif estado == "verificado":
+                    # sigue «verificado»: la siguiente tanda vuelve a intentar desalojarlo
                     actualizar(conn, r, error=f"no se pudo desalojar: {res.get(p)}")
+                    resumen["desalojo_fallido"] += 1
+                else:
+                    # un apartado: su «error» es el motivo por el que se apartó y no se pisa
+                    nota = "; ".join(x for x in (fila["nota"], f"copia local sin liberar: {res.get(p)}") if x)
+                    actualizar(conn, r, nota=nota)
                     resumen["desalojo_fallido"] += 1
             log(f"  Desalojados {sum(1 for r in a_desalojar if res.get(os.path.join(cfg.origen, r)) == 'ok')} "
                 f"de {len(a_desalojar)} (la copia sigue en iCloud).")
         tiempos["desalojar"] = tiempos.get("desalojar", 0) + time.time() - t0
+        if parar:
+            raise SystemExit(parar)
     return resumen
 
 
@@ -1232,7 +1311,11 @@ def escribir_revision(cfg: Config, conn: sqlite3.Connection, log: Registro | Non
              if r["integridad"] in ("parcial", "dudosa") or (r["nota"] or "").startswith("sin imágenes")])
     seccion("Sin portada", "La app mostrará una tarjeta vacía.", ("Fichero", "Nota"),
             [(r["ruta_nfc"], r["nota"] or "") for r in filas if r["estado"] in EN_DRIVE and not r["portada"]])
-    seccion("Errores pendientes", "Se reintentan en la siguiente tanda.", ("Fichero", "Estado", "Error"),
+    seccion("Errores pendientes",
+            "Se reintentan solos en la siguiente «make migrar»: los «pendiente» vuelven a la cola; los «subido» "
+            "(md5 distinto en Drive) se resuben; los «verificado» se vuelven a desalojar; y lo que «mig-verificar» "
+            "no encuentra bien en Drive se resube y se verifica antes de desalojarlo otra vez.",
+            ("Fichero", "Estado", "Error"),
             [(r["ruta_nfc"], r["estado"], r["error"]) for r in filas if r["error"]
              and r["estado"] not in ("apartado_roto",)])
 
@@ -1471,6 +1554,27 @@ def cerrar_tanda(conn, tid: int, resumen: Counter):
     conn.commit()
 
 
+# errores que deja «mig-verificar» cuando Drive no tiene (o tiene otro) lo que la base da por subido
+ERRORES_VERIFICAR = ("no está en Drive", "md5/tamaño distinto")
+
+
+def rezagados(conn: sqlite3.Connection, log: Registro) -> list[sqlite3.Row]:
+    """Lo que una tanda ya cerrada dejó a medias y ninguna lista de pendientes recoge:
+    «subido» (md5 distinto en Drive) y «verificado» (falló el desalojo). Antes, lo que
+    «mig-verificar» encontró mal en Drive vuelve a «subido» para resubirse y verificarse
+    (y solo entonces desalojarse)."""
+    cond = " OR ".join("error LIKE ?" for _ in ERRORES_VERIFICAR)
+    params = [e + "%" for e in ERRORES_VERIFICAR]
+    devueltos = conn.execute(f"UPDATE ficheros SET estado='subido', actualizado=? WHERE clase='comic' "
+                             f"AND estado IN ('verificado','desalojado') AND ({cond})", [ahora()] + params).rowcount
+    conn.commit()
+    if devueltos:
+        log(f"  {num(devueltos)} que «mig-verificar» no encontró bien en Drive vuelven a «subido» para resubirse.")
+    filas = conn.execute("SELECT ruta, estado, tamano FROM ficheros WHERE clase='comic' "
+                         "AND estado IN ('subido','verificado')").fetchall()
+    return sorted(filas, key=lambda r: nombres.clave_ruta(nombres.ruta_normalizada(r["ruta"])))
+
+
 def cmd_tanda(cfg: Config, args) -> int:
     cfg.crear_dirs()
     log = Registro(cfg)
@@ -1479,34 +1583,55 @@ def cmd_tanda(cfg: Config, args) -> int:
         t_ini = time.time()
         conn, plan = preparar(cfg, log)
         abierta = conn.execute("SELECT * FROM tandas WHERE fin IS NULL AND tipo='tanda' ORDER BY id LIMIT 1").fetchone()
+        rutas = []
         if abierta:
             tid = abierta["id"]
             rutas = [r["ruta"] for r in conn.execute(
                 "SELECT ruta FROM ficheros WHERE tanda=? AND estado IN ('pendiente','subido','verificado')", (tid,))]
             rutas.sort(key=lambda r: nombres.clave_ruta(nombres.ruta_normalizada(r)))
             log(f"\nReanudo la tanda {tid} (empezada {abierta['inicio']}): quedan {num(len(rutas))} ficheros.")
+        en_tanda = set(rutas)
+        rezag = [r for r in rezagados(conn, log) if r["ruta"] not in en_tanda]
+        if rezag:
+            n_sub = sum(1 for r in rezag if r["estado"] == "subido")
+            log(f"Rezagados de tandas anteriores: {num(len(rezag))} ({num(n_sub)} subidos sin verificar, "
+                f"{num(len(rezag) - n_sub)} verificados sin desalojar); van primero en esta tanda.")
+        rutas_rezag = [r["ruta"] for r in rezag]
+        if abierta:
+            rutas = rutas_rezag + rutas
+            if rutas_rezag:
+                conn.executemany("UPDATE ficheros SET tanda=? WHERE ruta=?", [(tid, r) for r in rutas_rezag])
+                conn.commit()
         else:
+            # lo que se resube de los rezagados cuenta para el tamaño de la tanda
+            peso_rezag = sum(r["tamano"] or 0 for r in rezag if r["estado"] == "subido")
             pend = plan.pendientes()
-            elegidos = elegir_tanda(pend, int(cfg.tanda_gb * GB))
-            if not elegidos:
+            elegidos = elegir_tanda(pend, max(0, int(cfg.tanda_gb * GB) - peso_rezag))
+            if not elegidos and not rezag:
                 log("No queda nada pendiente: la biblioteca entera está migrada (o apartada).")
                 return 0
-            rutas = [f["ruta"] for f in elegidos]
+            rutas = rutas_rezag + [f["ruta"] for f in elegidos]
             tid = None
         bytes_tanda = sum(r["tamano"] for r in filas_por_rutas(conn, rutas, "tamano, estado")
-                          if r["estado"] == "pendiente")
+                          if r["estado"] in ("pendiente", "subido"))
         comprobar_cuota(cfg, log, bytes_tanda)
         if tid is None:
             tid = nueva_tanda(conn, "tanda", "alfabético", rutas, bytes_tanda)
-            primero = nombres.ruta_normalizada(rutas[0])
-            ultimo = nombres.ruta_normalizada(rutas[-1])
-            log(f"\nTanda {tid}: {num(len(rutas))} ficheros, {gb(bytes_tanda)}, de «{primero}» a «{ultimo}».")
+            nuevos = rutas[len(rutas_rezag):]
+            if nuevos:
+                primero = nombres.ruta_normalizada(nuevos[0])
+                ultimo = nombres.ruta_normalizada(nuevos[-1])
+                log(f"\nTanda {tid}: {num(len(rutas))} ficheros, {gb(bytes_tanda)}, de «{primero}» a «{ultimo}»"
+                    + (f" (más {num(len(rutas_rezag))} rezagados)." if rutas_rezag else "."))
+            else:
+                log(f"\nTanda {tid}: solo los {num(len(rutas_rezag))} rezagados ({gb(bytes_tanda)}).")
         tiempos = {}
         resumen = procesar(cfg, conn, log, tid, rutas, tiempos)
         quedan = conn.execute("SELECT COUNT(*) FROM ficheros WHERE tanda=? AND estado IN ('pendiente','subido','verificado')",
                               (tid,)).fetchone()[0]
-        # procesar() llegó al final: la tanda se cierra aunque queden errores (se reintentan en la
-        # siguiente). Solo una interrupción (Ctrl-C, apagón, parada por cuota o disco) la deja abierta.
+        # procesar() llegó al final: la tanda se cierra aunque queden errores. Los «pendiente» vuelven a
+        # la lista de pendientes; los «subido» y «verificado», como rezagados de la siguiente tanda.
+        # Solo una interrupción (Ctrl-C, apagón, parada por cuota, disco o Drive caído) la deja abierta.
         cerrar_tanda(conn, tid, resumen)
         generar_indice(cfg, conn, log)
         escribir_revision(cfg, conn, log)
@@ -1624,6 +1749,8 @@ def cmd_humo(cfg: Config, args) -> int:
 def informe_humo(cfg, objetivo, filas, antes, estado_icloud, md5_drive, lsl, lsl_ind, md5_salida,
                  resumen, tiempos, total, exito, cuota_ini, n_port, en_indice, rc_ind) -> str:
     ruta = os.path.join(cfg.dir_logs, f"humo-{dt.date.today():%Y-%m-%d}.md")
+    if os.path.exists(ruta):   # otra prueba del mismo día: no se pisa el informe anterior
+        ruta = os.path.join(cfg.dir_logs, f"humo-{dt.datetime.now():%Y-%m-%d-%H%M%S}.md")
     L = [f"# Prueba de humo — {dt.datetime.now():%d-%m-%Y %H:%M}", "",
          f"Resultado: **{'SUPERADA' if exito else 'CON FALLOS'}**", "",
          f"- Carpeta: `{objetivo}` ({len(filas)} ficheros, {mb(sum(r['tamano'] for r in filas))})",

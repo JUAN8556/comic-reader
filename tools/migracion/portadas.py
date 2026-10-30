@@ -1,6 +1,6 @@
 """Portadas: primera imagen en orden natural -> WebP de 300 px de ancho.
 
-Archivos (ZIP, RAR, 7z): «bsdtar -xOqf» de la primera imagen en orden natural.
+Archivos (ZIP, RAR, 7z, TAR): «bsdtar -xOqf» de la primera imagen en orden natural.
 En un RAR4 sólido solo se puede sacar la primera entrada física, así que se
 prueba esa primero. PDF: «sips» pinta la 1.ª página. Si nada funciona, no hay
 portada y la app muestra una tarjeta vacía.
@@ -97,8 +97,9 @@ def generar(ruta: str, formato: str, lista: list[bytes], solido: bool | None,
             if portada_pdf(ruta, salida, tmpdir):
                 return True, ""
             return False, "sips no pudo pintar la 1.ª página del PDF"
-        if formato not in (formatos.ZIP, formatos.RAR4, formatos.RAR5, formatos.SEVEN_ZIP):
-            return False, "formato sin portada"
+        # ZIP, RAR, 7z, TAR o cualquier otro que bsdtar haya sabido listar (autoextraíbles…)
+        if not lista:
+            return False, "formato sin portada" if formato == formatos.DESCONOCIDO else "sin lista de entradas"
         cands = candidatas(lista, bool(solido) and formato == formatos.RAR4)
         if not cands:
             return False, "no hay imágenes dentro"

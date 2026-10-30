@@ -10,7 +10,7 @@ import sys
 import tempfile
 import unittest
 import zipfile
-from contextlib import redirect_stdout
+from contextlib import contextmanager, redirect_stdout
 
 AQUI = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(AQUI))
@@ -25,6 +25,23 @@ HERRAMIENTAS = all(shutil.which(x) for x in ("bsdtar", "cwebp", "sips"))
 
 def md5(p):
     return hashlib.md5(sx.leer(p)).hexdigest()
+
+
+@contextmanager
+def entorno(**variables):
+    previo = {k: os.environ.get(k) for k in variables}
+    os.environ.update(variables)
+    try:
+        yield
+    finally:
+        for k, v in previo.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+LOTE_DE_UNO = "0.000000001"      # LOTE_GB tan pequeño que cada fichero es su propio lote
 
 
 @unittest.skipUnless(HERRAMIENTAS, "faltan bsdtar, cwebp o sips")
@@ -106,6 +123,21 @@ class Flujo(unittest.TestCase):
     def texto(self, p):
         with open(p, encoding="utf-8") as f:
             return f.read()
+
+    def tandas_abiertas(self):
+        conn = sqlite3.connect(os.path.join(self.data, "estado", "migracion.sqlite"))
+        try:
+            return conn.execute("SELECT COUNT(*) FROM tandas WHERE fin IS NULL AND tipo='tanda'").fetchone()[0]
+        finally:
+            conn.close()
+
+    def serie(self, nombre, n):
+        rutas = []
+        for i in range(1, n + 1):
+            p = os.path.join(self.origen, nombre, f"{nombre} 0{i}.cbz")
+            sx.cbz(p, paginas=(f"{nombre}-{i}-a.png", f"{nombre}-{i}-b.png"))   # contenido único: sin duplicados
+            rutas.append(f"{nombre}/{nombre} 0{i}.cbz")
+        return rutas
 
     def test_1_plan_no_toca_nada(self):
         rc, out = self.correr("plan", "--sin-drive")
@@ -195,6 +227,106 @@ class Flujo(unittest.TestCase):
             self.assertIn("PARADA", out)
         finally:
             del os.environ["FAKE_FREE"]
+
+    def test_9a_rezagados_de_una_tanda_cerrada(self):
+        # F1: un «subido» (md5 distinto incluso tras el reintento) y un «verificado» (falló el desalojo)
+        # al cerrar la tanda; la siguiente «make migrar» tiene que recogerlos sin que nada más los nombre.
+        r1, r2 = self.serie("Serie F1", 2)
+        with entorno(FAKE_CORROMPER="Serie F1 001", FAKE_EVICT_FALLA="Serie F1 02.cbz"):
+            rc, out = self.correr("tanda")
+        self.assertEqual(rc, 1, out)
+        self.assertEqual(self.tandas_abiertas(), 0, "la tanda se cierra aunque queden errores")
+        filas = self.db()
+        self.assertEqual(filas[r1]["estado"], "subido", out)
+        self.assertIn("md5 distinto", filas[r1]["error"])
+        self.assertEqual(filas[r2]["estado"], "verificado")
+        self.assertIn("no se pudo desalojar", filas[r2]["error"])
+        rc, out = self.correr("tanda")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("Rezagados de tandas anteriores: 2", out)
+        filas = self.db()
+        for r in (r1, r2):
+            self.assertEqual(filas[r]["estado"], "desalojado", out)
+            self.assertIsNone(filas[r]["error"])
+            self.assertEqual(md5(os.path.join(self.drive, "Cómics", filas[r]["destino"])), filas[r]["md5"])
+        rc, out = self.correr("tanda")
+        self.assertIn("No queda nada pendiente", out)
+
+    def test_9b_subida_caida_no_materializa_el_resto(self):
+        # F2: rclone copy falla del todo (Drive responde a «about»): tras dos lotes en blanco, PARADA con la
+        # tanda abierta; el tercer fichero no se llega a materializar. Al volver la red, se reanuda.
+        rutas = self.serie("Serie F2", 3)
+        with entorno(FAKE_FALLA="copy", LOTE_GB=LOTE_DE_UNO):
+            rc, out = self.correr("tanda")
+        self.assertNotEqual(rc, 0, out)
+        self.assertIn("PARADA: dos lotes seguidos", out)
+        filas = self.db()
+        self.assertTrue(filas[rutas[0]]["md5"] and filas[rutas[1]]["md5"])
+        self.assertIsNone(filas[rutas[2]]["md5"], "el tercer lote no debía materializarse")
+        self.assertTrue(all(filas[r]["estado"] == "pendiente" for r in rutas))
+        self.assertEqual(self.tandas_abiertas(), 1)
+        with entorno(LOTE_GB=LOTE_DE_UNO):
+            rc, out = self.correr("tanda")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("Reanudo la tanda", out)
+        filas = self.db()
+        self.assertTrue(all(filas[r]["estado"] == "desalojado" for r in rutas), out)
+        self.assertEqual(self.tandas_abiertas(), 0)
+
+    def test_9c_red_caida_a_media_tanda(self):
+        # F2: la red se cae durante la subida: ni copy ni lsjson ni about. Para tras el primer lote.
+        rutas = self.serie("Serie F2b", 2)
+        caido = os.path.join(self.drive, "caido")
+        try:
+            with entorno(FAKE_FALLA="copy,caer", LOTE_GB=LOTE_DE_UNO):
+                rc, out = self.correr("tanda")
+            self.assertNotEqual(rc, 0, out)
+            self.assertIn("PARADA", out)
+            filas = self.db()
+            self.assertTrue(filas[rutas[0]]["md5"])
+            self.assertIsNone(filas[rutas[1]]["md5"], "con Drive caído no se materializa el lote siguiente")
+            self.assertIn("no se pudo comprobar en Drive", filas[rutas[0]]["error"])
+            # sin red ni siquiera arranca: la tanda sigue abierta y nada nuevo se materializa
+            with entorno(LOTE_GB=LOTE_DE_UNO):
+                rc, out = self.correr("tanda")
+            self.assertNotEqual(rc, 0, out)
+            self.assertIsNone(self.db()[rutas[1]]["md5"])
+        finally:
+            if os.path.exists(caido):
+                os.remove(caido)
+        with entorno(LOTE_GB=LOTE_DE_UNO):
+            rc, out = self.correr("tanda")
+        self.assertEqual(rc, 0, out)
+        filas = self.db()
+        self.assertTrue(all(filas[r]["estado"] == "desalojado" and filas[r]["error"] is None for r in rutas), out)
+
+    def test_9d_lo_que_verificar_encuentra_mal_se_resube(self):
+        # F1: un desalojado cuyo fichero en Drive cambió (mismo tamaño y fecha): «mig-verificar» lo señala y la
+        # siguiente tanda lo resube y lo verifica antes de volver a desalojarlo.
+        ruta = "Serie Uno/Serie Uno 02.cbz"
+        fila = self.db()[ruta]
+        self.assertEqual(fila["estado"], "desalojado")
+        p = os.path.join(self.drive, "Cómics", fila["destino"])
+        st = os.stat(p)
+        with open(p, "r+b") as f:
+            f.seek(st.st_size // 2)
+            b = f.read(1)
+            f.seek(-1, 1)
+            f.write(bytes([b[0] ^ 0xFF]))
+        os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns))
+        rc, out = self.correr("verificar")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("1 distintos", out)
+        rc, out = self.correr("tanda")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("vuelven a «subido»", out)
+        self.assertEqual(md5(p), fila["md5"])
+        fila = self.db()[ruta]
+        self.assertEqual(fila["estado"], "desalojado")
+        self.assertIsNone(fila["error"])
+        rc, out = self.correr("verificar")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("0 distintos", out)
 
 
 if __name__ == "__main__":

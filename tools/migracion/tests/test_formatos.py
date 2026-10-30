@@ -36,6 +36,20 @@ class Cabeceras(unittest.TestCase):
         self.assertEqual(fm.detectar(sx.cabecera_rar5(False)), (fm.RAR5, False))
         self.assertEqual(fm.detectar(sx.cabecera_rar5(True)), (fm.RAR5, True))
 
+    def test_tar_ustar(self):
+        h = b"001.png".ljust(257, b"\x00") + b"ustar\x0000" + b"\x00" * 300
+        self.assertEqual(fm.detectar(h), (fm.TAR, False))
+        self.assertEqual(fm.EXT_REAL[fm.TAR], ".cbt")
+
+    def test_info_rar(self):
+        self.assertEqual(fm.info_rar(sx.cabecera_rar4(False)), {"cifrado": False, "volumen": False})
+        self.assertTrue(fm.info_rar(sx.cabecera_rar4(False, extra=0x0080))["cifrado"])
+        self.assertTrue(fm.info_rar(sx.cabecera_rar4(True, extra=0x0001))["volumen"])
+        self.assertTrue(fm.info_rar(sx.cabecera_rar5_cifrada())["cifrado"])
+        self.assertFalse(fm.info_rar(sx.cabecera_rar5(True))["cifrado"])
+        self.assertEqual(fm.detectar(sx.cabecera_rar5_cifrada()), (fm.RAR5, None))
+        self.assertEqual(fm.info_rar(b"PK\x03\x04"), {"cifrado": False, "volumen": False})
+
     def test_extension_real(self):
         self.assertEqual(fm.EXT_REAL[fm.ZIP], ".cbz")
         self.assertEqual(fm.EXT_REAL[fm.SEVEN_ZIP], ".cb7")
@@ -99,6 +113,92 @@ class Integridad(unittest.TestCase):
             self.assertEqual(r["estado"], "rota")
         finally:
             fm.listar = original
+
+    def _con_listar(self, resultado, ruta, formato, solido):
+        original = fm.listar
+        fm.listar = lambda ruta, timeout=600: resultado
+        try:
+            return fm.integridad(ruta, formato, solido, 10)
+        finally:
+            fm.listar = original
+
+    def _fichero(self, nombre, datos):
+        p = os.path.join(self.tmp, nombre)
+        with open(p, "wb") as f:
+            f.write(datos)
+        return p
+
+    def test_tiempo_agotado_es_dudosa_no_rota(self):
+        # F4 (a): bsdtar -tf que no termina (Mac cargada, RAR enorme) no es un archivo roto
+        r = self._con_listar((fm.RC_TIEMPO, [b"001.jpg"], "bsdtar -tf no terminó en 600 s"), __file__, fm.RAR4, False)
+        self.assertEqual(r["estado"], "dudosa")
+        self.assertIn("no se pudo comprobar", r["nota"])
+        self.assertEqual(r["lista"], [b"001.jpg"])
+        r = self._con_listar((fm.RC_TIEMPO, [], "bsdtar -tf no terminó en 600 s"), __file__, fm.ZIP, False)
+        self.assertEqual(r["estado"], "dudosa")
+
+    def test_tiempo_agotado_de_verdad(self):
+        p = os.path.join(self.tmp, "a.cbz")
+        sx.cbz(p)
+        rc, lista, err = fm.listar(p, timeout=0)
+        if rc == 0:      # bsdtar fue más rápido que el temporizador: nada que probar
+            self.skipTest("bsdtar terminó antes del plazo")
+        self.assertEqual(rc, fm.RC_TIEMPO)
+        self.assertIn("no terminó", err)
+
+    def test_cbt_tar(self):
+        p = os.path.join(self.tmp, "a.cbt")
+        sx.tar(p)
+        formato, solido = fm.detectar(fm.leer_cabecera(p))
+        self.assertEqual(formato, fm.TAR)
+        r = fm.integridad(p, formato, solido, os.path.getsize(p))
+        self.assertEqual(r["estado"], "ok")
+        self.assertEqual(r["imagenes"], 3)
+
+    def test_cabecera_desconocida_que_bsdtar_lee_es_dudosa(self):
+        # F4 (b): p. ej. un autoextraíble o un tar.gz: no se aparta, se sube y va a revisión
+        p = os.path.join(self.tmp, "a.cbt")
+        sx.tar(p, comprimido=True)
+        formato, solido = fm.detectar(fm.leer_cabecera(p))
+        self.assertEqual(formato, fm.DESCONOCIDO)
+        r = fm.integridad(p, formato, solido, os.path.getsize(p))
+        self.assertEqual(r["estado"], "dudosa")
+        self.assertIn("cabecera desconocida", r["nota"])
+        self.assertEqual(r["imagenes"], 3)
+
+    def test_rar_cifrado_es_dudosa(self):
+        # F4 (c): cabeceras cifradas -> bsdtar no lista nada, pero no está roto
+        p = self._fichero("c4.cbr", sx.cabecera_rar4(False, extra=0x0080))
+        r = self._con_listar((1, [], "bsdtar: Invalid header"), p, fm.RAR4, False)
+        self.assertEqual(r["estado"], "dudosa")
+        self.assertIn("cifrado", r["nota"])
+        p = self._fichero("c5.cbr", sx.cabecera_rar5_cifrada())
+        r = self._con_listar((1, [], "bsdtar: Truncated RAR5 header"), p, fm.RAR5, None)
+        self.assertEqual(r["estado"], "dudosa")
+        # 7z (o cualquiera) cuyo error de libarchive habla de cifrado
+        r = self._con_listar((1, [], "bsdtar: The archive header is encrypted, but currently not supported"),
+                             __file__, fm.SEVEN_ZIP, False)
+        self.assertEqual(r["estado"], "dudosa")
+
+    def test_rar5_solido_parcial(self):
+        # F4 (d): la excepción de «sólido» ya no es solo para RAR4
+        r = self._con_listar((1, [b"001.jpg"], "bsdtar: Invalid solid"), __file__, fm.RAR5, True)
+        self.assertEqual(r["estado"], "parcial")
+        r = self._con_listar((1, [b"001.jpg"], "bsdtar: Invalid solid"), __file__, fm.RAR5, None)
+        self.assertEqual(r["estado"], "parcial")
+        r = self._con_listar((1, [b"001.jpg"], "bsdtar: Truncated"), __file__, fm.RAR5, False)
+        self.assertEqual(r["estado"], "rota")
+
+    def test_rar_multivolumen_es_dudosa(self):
+        p = self._fichero("v.cbr", sx.cabecera_rar4(False, extra=0x0001))
+        r = self._con_listar((1, [], "bsdtar: Missing volume"), p, fm.RAR4, False)
+        self.assertEqual(r["estado"], "dudosa")
+        self.assertIn("multivolumen", r["nota"])
+
+    def test_rar_conocido_que_no_lista_nada_sigue_roto(self):
+        p = self._fichero("r.cbr", sx.cabecera_rar4(False))
+        r = self._con_listar((1, [], "bsdtar: Damaged archive"), p, fm.RAR4, False)
+        self.assertEqual(r["estado"], "rota")
 
     def test_pdf_con_y_sin_eof(self):
         p = os.path.join(self.tmp, "a.pdf")

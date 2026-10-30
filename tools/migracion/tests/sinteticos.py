@@ -1,8 +1,10 @@
-"""Ficheros sintéticos para las pruebas: PNG, CBZ, 7z, PDF y cabeceras RAR."""
+"""Ficheros sintéticos para las pruebas: PNG, CBZ, CBT (tar), 7z, PDF y cabeceras RAR."""
 
+import io
 import os
 import struct
 import subprocess
+import tarfile
 import zlib
 import zipfile
 
@@ -27,6 +29,17 @@ def cbz(ruta: str, paginas=("10.png", "2.png", "1.png"), extra=None):
             z.writestr(p, png(color=(10 * i, 100, 200)))
         for nombre, datos in (extra or {}).items():
             z.writestr(nombre, datos)
+
+
+def tar(ruta: str, paginas=("10.png", "2.png", "1.png"), comprimido: bool = False):
+    """CBT: tar ustar (o tar.gz, cuya cabecera ya no es «ustar», con comprimido=True)."""
+    os.makedirs(os.path.dirname(ruta), exist_ok=True)
+    with tarfile.open(ruta, "w:gz" if comprimido else "w", format=tarfile.USTAR_FORMAT) as t:
+        for i, p in enumerate(paginas):
+            datos = png(color=(10 * i, 150, 50))
+            info = tarfile.TarInfo(p)
+            info.size = len(datos)
+            t.addfile(info, io.BytesIO(datos))
 
 
 def siete_z(ruta: str, tmp: str):
@@ -63,8 +76,9 @@ def pdf(ruta: str):
         f.write(out)
 
 
-def cabecera_rar4(solido: bool) -> bytes:
-    flags = 0x0008 if solido else 0x0000
+def cabecera_rar4(solido: bool, extra: int = 0) -> bytes:
+    """extra: más banderas de MAIN_HEAD (0x0080 cabeceras cifradas, 0x0001 multivolumen)."""
+    flags = (0x0008 if solido else 0x0000) | extra
     return b"Rar!\x1a\x07\x00" + b"\xcf\x90" + b"\x73" + struct.pack("<H", flags) + b"\x0d\x00" + b"\x00" * 20
 
 
@@ -81,3 +95,9 @@ def _vint(n: int) -> bytes:
 def cabecera_rar5(solido: bool) -> bytes:
     cuerpo = _vint(1) + _vint(0) + _vint(0x0004 if solido else 0)   # tipo, flags, archive flags
     return b"Rar!\x1a\x07\x01\x00" + b"\x00\x00\x00\x00" + _vint(len(cuerpo)) + cuerpo + b"\x00" * 8
+
+
+def cabecera_rar5_cifrada() -> bytes:
+    """RAR5 cuyo primer bloque es la cabecera de cifrado del archivo (tipo 4)."""
+    cuerpo = _vint(4) + _vint(0) + _vint(0) + _vint(0)   # tipo, flags, versión, flags de cifrado
+    return b"Rar!\x1a\x07\x01\x00" + b"\x00\x00\x00\x00" + _vint(len(cuerpo)) + cuerpo + b"\x00" * 40

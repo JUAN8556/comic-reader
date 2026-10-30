@@ -58,6 +58,25 @@ class Generar(unittest.TestCase):
         self.assertTrue(po.generar(p, fm.SEVEN_ZIP, lista, False, salida, os.path.join(self.tmp, "w"))[0])
         self._webp_ok(salida)
 
+    def test_cbt(self):
+        p = os.path.join(self.tmp, "a.cbt")
+        sx.tar(p)
+        rc, lista, _ = fm.listar(p)
+        salida = os.path.join(self.tmp, "p.webp")
+        hecho, nota = po.generar(p, fm.TAR, lista, False, salida, os.path.join(self.tmp, "w"))
+        self.assertTrue(hecho, nota)
+        self._webp_ok(salida)
+
+    def test_desconocido_que_bsdtar_lista(self):
+        p = os.path.join(self.tmp, "a.cbt")
+        sx.tar(p, comprimido=True)
+        rc, lista, _ = fm.listar(p)
+        salida = os.path.join(self.tmp, "p.webp")
+        hecho, nota = po.generar(p, fm.DESCONOCIDO, lista, None, salida, os.path.join(self.tmp, "w"))
+        self.assertTrue(hecho, nota)
+        self._webp_ok(salida)
+        self.assertFalse(po.generar(p, fm.DESCONOCIDO, [], None, salida, os.path.join(self.tmp, "w"))[0])
+
     def test_pdf(self):
         p = os.path.join(self.tmp, "a.pdf")
         sx.pdf(p)
