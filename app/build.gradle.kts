@@ -2,6 +2,7 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
+    id("org.jetbrains.kotlin.plugin.serialization")
 }
 
 // La contraseña del keystore la pone el Makefile desde el llavero de macOS; nunca vive en el repo.
@@ -66,5 +67,25 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     debugImplementation("androidx.compose.ui:ui-tooling")
 
+    implementation("androidx.core:core-ktx:1.17.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.11.0")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.11.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.10.2")
+
+    // Drive: token con Play Services + REST con OkHttp y kotlinx.serialization (sin google-api-client)
+    implementation("com.google.android.gms:play-services-auth:22.0.0")
+    implementation("com.squareup.okhttp3:okhttp:5.5.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.12.0")
+
+    // Archivos: junrar (RAR4, RAR4 sólido, RAR5); ZIP con java.util.zip; PDF con android.graphics.pdf
+    implementation("com.github.junrar:junrar:8.1.2")
+
+    // Lector: Coil 3 + Telephoto (zoom con teselado)
+    implementation("io.coil-kt.coil3:coil-compose:3.6.3")
+    implementation("me.saket.telephoto:zoomable-image-coil3:0.19.0")
+
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
+    testImplementation("com.squareup.okhttp3:mockwebserver3-junit4:5.5.1")
 }
