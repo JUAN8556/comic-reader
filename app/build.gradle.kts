@@ -63,6 +63,9 @@ dependencies {
     implementation(composeBom)
     implementation("androidx.activity:activity-compose:1.13.0")
     implementation("androidx.compose.material3:material3")
+    // Biblioteca: clases de tamaño de ventana (columnas de la rejilla) e iconos básicos; versiones del BOM
+    implementation("androidx.compose.material3.adaptive:adaptive")
+    implementation("androidx.compose.material:material-icons-core")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     debugImplementation("androidx.compose.ui:ui-tooling")
