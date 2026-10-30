@@ -1,6 +1,6 @@
 # Consola de Google — lo que hace Jano una sola vez (25-30 min)
 
-Cuenta: juan8556@gmail.com. Proyecto: **Comics**. El mismo proyecto sirve para rclone (migración) y para la app.
+Cuenta: la de Google de Jano (la misma del Drive; el correo no se escribe aquí porque el repo es público). Proyecto: **Comics**. El mismo proyecto sirve para rclone (migración) y para la app.
 
 0. **Antes:** https://myaccount.google.com/security → buscar «Programa de Protección Avanzada». Si está inscrito, parar: `drive.readonly` quedaría bloqueado y se pasa al plan B (cuenta de servicio).
 1. https://console.cloud.google.com → selector de proyectos → «Proyecto nuevo» → Nombre `Comics` → Ubicación «Sin organización» → Crear → seleccionarlo.
