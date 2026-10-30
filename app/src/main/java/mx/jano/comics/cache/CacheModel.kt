@@ -74,9 +74,12 @@ interface TransferQueue {
     val isUnmetered: StateFlow<Boolean>
 }
 
-/** Los rellena el frente «cache». */
+/** Los rellena el frente «cache». Una instancia por proceso (ver [CacheRuntime]). */
 object CacheFactories {
-    fun cacheManager(context: Context, drive: DriveApi, settings: SettingsStore, library: LibraryRepository): CacheManager = TODO("mvp/cache")
-    fun pinManager(context: Context, cache: CacheManager, library: LibraryRepository): PinManager = TODO("mvp/cache")
-    fun transferQueue(context: Context, cache: CacheManager, settings: SettingsStore): TransferQueue = TODO("mvp/cache")
+    fun cacheManager(context: Context, drive: DriveApi, settings: SettingsStore, library: LibraryRepository): CacheManager =
+        CacheRuntime.cacheManager(context, drive, settings, library, progress = null)
+    fun pinManager(context: Context, cache: CacheManager, library: LibraryRepository): PinManager =
+        CacheRuntime.pinManager(context, cache, library)
+    fun transferQueue(context: Context, cache: CacheManager, settings: SettingsStore): TransferQueue =
+        CacheRuntime.transferQueue(context, cache, settings)
 }

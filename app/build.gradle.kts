@@ -78,6 +78,9 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:5.5.1")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.12.0")
 
+    // Caché: prefetch del N+1 con WorkManager (los libros fijados van con JobScheduler UIDT, sin dependencia)
+    implementation("androidx.work:work-runtime-ktx:2.12.0")
+
     // Archivos: junrar (RAR4, RAR4 sólido, RAR5); ZIP con java.util.zip; PDF con android.graphics.pdf
     implementation("com.github.junrar:junrar:8.1.2")
 
