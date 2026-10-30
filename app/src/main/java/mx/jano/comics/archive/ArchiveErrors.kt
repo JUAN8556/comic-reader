@@ -46,4 +46,7 @@ internal object ArchiveTexts {
     fun unsupportedZipMethod(file: File, entry: String, method: Int) =
         "La página «$entry» de «${file.name}» usa un método de compresión ZIP que Android no trae ($method)."
     fun closed(file: File) = "«${file.name}» ya está cerrado."
+    fun writeFailed(file: File, page: Int, detail: String?) =
+        "No se pudo guardar la página $page de «${file.name}» en la tablet (¿almacenamiento lleno?)" +
+            (detail?.let { ": $it" } ?: ".") + " El archivo no está dañado."
 }

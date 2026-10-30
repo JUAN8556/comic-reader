@@ -1,5 +1,6 @@
 package mx.jano.comics.reader
 
+import android.os.SystemClock
 import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
@@ -41,6 +42,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -99,6 +101,11 @@ fun ReaderScreen(
     ) { pageCount }
     var overlayVisible by rememberSaveable { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+
+    // Para la sonda (ReaderTrace): qué página queda asentada tras cada paso.
+    LaunchedEffect(pagerState) {
+        snapshotFlow { pagerState.settledPage }.collect { ReaderTrace.log("pág. ${it + 1} de $pageCount asentada") }
+    }
 
     // Atrás: primero cierra la superposición; después sale del lector.
     BackHandler {
@@ -188,6 +195,7 @@ private fun ReaderPage(
     onTap: (Offset, IntSize) -> Unit,
 ) {
     var attempt by remember { mutableIntStateOf(0) }
+    val composedAt = remember(index, attempt) { SystemClock.elapsedRealtime() }
     val state by produceState<PageState>(initialValue = PageState.Loading, index, attempt) {
         value = PageState.Loading
         value = try {
@@ -224,7 +232,10 @@ private fun ReaderPage(
                 val request = remember(s.file, attempt) {
                     ImageRequest.Builder(context)
                         .data(s.file)
-                        .listener(onError = { _, result -> decodeError = describe(result.throwable) })
+                        .listener(onError = { _, result ->
+                            decodeError = describe(result.throwable)
+                            ReaderTrace.log("pág. ${index + 1}: ERROR al decodificar: ${describe(result.throwable)}")
+                        })
                         .build()
                 }
                 ZoomableAsyncImage(
@@ -235,6 +246,14 @@ private fun ReaderPage(
                     contentScale = ContentScale.Fit,
                     onClick = tapAt,
                 )
+                val displayed = imageState.isImageDisplayed
+                LaunchedEffect(s.file, attempt, displayed) {
+                    if (displayed) {
+                        val ms = SystemClock.elapsedRealtime() - composedAt
+                        val where = if (isSettledPage) "en pantalla" else "precargada"
+                        ReaderTrace.log("pág. ${index + 1} dibujada ($where) $ms ms después de componerse")
+                    }
+                }
                 val error = decodeError
                 if (error != null) {
                     PageError(index + 1, error, retry)

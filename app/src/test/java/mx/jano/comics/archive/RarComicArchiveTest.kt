@@ -9,29 +9,31 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
+import java.io.IOException
+import java.io.OutputStream
 import kotlin.random.Random
 
-/** junrar de verdad sobre RAR4 escritos por [Rar4TestWriter] (entradas guardadas, banderas y CRC reales). */
+/** junrar de verdad sobre RAR4 escritos por [Rar4StoredWriter] (entradas guardadas, banderas y CRC reales). */
 class RarComicArchiveTest {
     @get:Rule val tmp = TemporaryFolder()
 
     private fun page(seed: Int, size: Int = 4096) = Random(seed).nextBytes(size)
 
     /** Orden físico desordenado, carpeta con «\» de Windows y morralla que no son páginas. */
-    private fun sampleEntries(): List<Rar4TestWriter.Entry> = listOf(
-        Rar4TestWriter.Entry("10.jpg", page(10)),
-        Rar4TestWriter.Entry("leeme.txt", "hola".toByteArray()),
-        Rar4TestWriter.Entry("carpeta", directory = true),
-        Rar4TestWriter.Entry("carpeta\\3.png", page(3)),
-        Rar4TestWriter.Entry("2.jpg", page(2)),
-        Rar4TestWriter.Entry("Thumbs.db", page(99, 100)),
-        Rar4TestWriter.Entry("1.jpg", page(1)),
+    private fun sampleEntries(): List<Rar4StoredWriter.Entry> = listOf(
+        Rar4StoredWriter.Entry("10.jpg", page(10)),
+        Rar4StoredWriter.Entry("leeme.txt", "hola".toByteArray()),
+        Rar4StoredWriter.Entry("carpeta", directory = true),
+        Rar4StoredWriter.Entry("carpeta\\3.png", page(3)),
+        Rar4StoredWriter.Entry("2.jpg", page(2)),
+        Rar4StoredWriter.Entry("Thumbs.db", page(99, 100)),
+        Rar4StoredWriter.Entry("1.jpg", page(1)),
     )
     private val expectedOrder = listOf("1.jpg", "2.jpg", "10.jpg", "carpeta/3.png")
     private val expectedSeed = listOf(1, 2, 10, 3)
 
-    private fun write(name: String, solid: Boolean, entries: List<Rar4TestWriter.Entry> = sampleEntries()) =
-        tmp.newFile(name).also { Rar4TestWriter.write(it, entries, solid) }
+    private fun write(name: String, solid: Boolean, entries: List<Rar4StoredWriter.Entry> = sampleEntries()) =
+        tmp.newFile(name).also { Rar4StoredWriter.write(it, entries, solid) }
 
     @Test fun no_solido_orden_natural_y_contenido_por_los_dos_caminos() {
         val f = write("plano.cbr", solid = false)
@@ -72,6 +74,64 @@ class RarComicArchiveTest {
         }
     }
 
+    /** Salida que acepta [limit] bytes y después falla como un disco lleno (ENOSPC). */
+    private class FullDisk(private val target: OutputStream, private val limit: Int) : OutputStream() {
+        private var written = 0
+        override fun write(b: Int) {
+            if (written >= limit) throw IOException("No space left on device")
+            target.write(b)
+            written++
+        }
+        override fun write(b: ByteArray, off: Int, len: Int) {
+            if (written + len > limit) throw IOException("No space left on device")
+            target.write(b, off, len)
+            written += len
+        }
+    }
+
+    @Test fun disco_lleno_dentro_de_junrar_no_se_cuenta_como_archivo_danado() {
+        // ARCH-1: junrar envuelve el IOException de la salida en RarException; antes salía «dañado o incompleto».
+        val big = 300 * 1024
+        val entries = listOf(Rar4StoredWriter.Entry("1.jpg", page(1, big)), Rar4StoredWriter.Entry("2.jpg", page(2, big)))
+        for (solid in listOf(false, true)) {
+            val f = write("lleno-$solid.cbr", solid, entries)
+            (ComicArchives.open(f, OpenOptions(directStoredReads = false)) as RarComicArchive).use { a ->
+                a.sinkDecoratorForTests = { FullDisk(it, 1000) }
+                val e = runCatching { a.extractPage(1, File(tmp.newFolder(), "p.jpg")) }.exceptionOrNull()
+                assertTrue("sólido=$solid: $e", e is IOException)
+                assertFalse("sólido=$solid, no es «dañado»: $e", e is ComicArchiveException)
+                assertTrue(e!!.message!!, e.message!!.contains("No space left on device"))
+                assertTrue(e.message!!, e.message!!.contains("no está dañado"))
+                // Con sitio otra vez, la misma página sale entera.
+                a.sinkDecoratorForTests = null
+                val ok = File(tmp.newFolder(), "ok.jpg")
+                a.extractPage(1, ok)
+                assertArrayEquals("sólido=$solid", page(2, big), ok.readBytes())
+            }
+        }
+    }
+
+    @Test fun crc_mala_por_junrar_sigue_siendo_archivo_danado() {
+        val f = write("crc-junrar.cbr", solid = false)
+        val bytes = f.readBytes()
+        val at = 7 + 13 + 32 + "10.jpg".length + 100
+        bytes[at] = (bytes[at].toInt() xor 0xFF).toByte()
+        f.writeBytes(bytes)
+        ComicArchives.open(f, OpenOptions(directStoredReads = false)).use { a ->
+            val e = runCatching { a.extractPage(2, File(tmp.newFolder(), "x.jpg")) }.exceptionOrNull()
+            assertTrue("$e", e is CorruptArchiveException)
+        }
+    }
+
+    @Test fun cerrado_antes_de_extraer_dice_cerrado() {
+        val f = write("cerrado.cbr", solid = true)
+        val a = ComicArchives.open(f)
+        a.close()
+        val e = runCatching { a.extractPage(0, File(tmp.newFolder(), "x.jpg")) }.exceptionOrNull()
+        assertTrue("$e", e is IOException && e !is ComicArchiveException)
+        assertTrue(e!!.message!!, e.message!!.contains("cerrado"))
+    }
+
     @Test fun el_sniffer_coincide_con_junrar() {
         for (solid in listOf(false, true)) {
             val f = write("s$solid.cbr", solid)
@@ -109,7 +169,7 @@ class RarComicArchiveTest {
         // 40 páginas de 64 KB: medimos los bytes comprimidos que lee junrar al pasar páginas HACIA ATRÁS.
         val n = 40
         val size = 64 * 1024
-        val entries = (1..n).map { Rar4TestWriter.Entry(String.format("%03d.jpg", it), page(it, size)) }
+        val entries = (1..n).map { Rar4StoredWriter.Entry(String.format("%03d.jpg", it), page(it, size)) }
         val f = write("atras.cbr", solid = true, entries = entries)
         val dir = tmp.newFolder("atras")
 
@@ -132,8 +192,8 @@ class RarComicArchiveTest {
 
     @Test fun entrada_cifrada_da_error_claro_sin_pedir_contrasena() {
         val entries = listOf(
-            Rar4TestWriter.Entry("1.jpg", page(1)),
-            Rar4TestWriter.Entry("2.jpg", page(2), encrypted = true),
+            Rar4StoredWriter.Entry("1.jpg", page(1)),
+            Rar4StoredWriter.Entry("2.jpg", page(2), encrypted = true),
         )
         val f = write("cifrado.cbr", solid = false, entries = entries)
         val e = runCatching { ComicArchives.open(f) }.exceptionOrNull()

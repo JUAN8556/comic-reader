@@ -39,6 +39,7 @@ internal class PageLoader(
             throw e
         } catch (t: Throwable) {
             jobs.remove(index, job)
+            ReaderTrace.log("pág. ${index + 1}: ERROR al extraer: ${t::class.java.simpleName}: ${t.message}")
             throw t
         }
     }
@@ -51,13 +52,23 @@ internal class PageLoader(
 
     private fun extract(index: Int): File {
         val dest = PageFiles.fileFor(dir, index, archive.pageName(index))
-        if (dest.isFile && dest.length() > 0L) return dest
+        if (dest.isFile && dest.length() > 0L) {
+            ReaderTrace.log("pág. ${index + 1}: ya estaba en disco (${dest.length() / 1024} KB)")
+            return dest
+        }
         if (!dir.isDirectory && !dir.mkdirs() && !dir.isDirectory) {
             throw IOException("no se pudo crear la carpeta de páginas ${dir.absolutePath}")
         }
         val tmp = File(dir, dest.name + ".part")
         tmp.delete()
-        synchronized(archive) { archive.extractPage(index, tmp) }
+        val queuedAt = System.nanoTime()
+        val extractMs = synchronized(archive) {
+            val t0 = System.nanoTime()
+            archive.extractPage(index, tmp)
+            (System.nanoTime() - t0) / 1_000_000
+        }
+        val waitedMs = (System.nanoTime() - queuedAt) / 1_000_000 - extractMs
+        ReaderTrace.log("pág. ${index + 1}: extraída en $extractMs ms (${tmp.length() / 1024} KB), $waitedMs ms esperando el archivo")
         if (!tmp.isFile || tmp.length() == 0L) {
             tmp.delete()
             throw IOException("la extracción de la página ${index + 1} dejó un fichero vacío")

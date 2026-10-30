@@ -80,6 +80,22 @@ class DriveRestApiTest {
 
     private fun RecordedRequest.auth() = headers["Authorization"]
 
+    /** Respuesta a `files.get?fields=…` (la versión que [DriveRestApi.download] pide antes de bajar). */
+    private fun meta(size: Long = 10, md5: String = "m1", rev: String = "r1") =
+        json(200, """{"id":"FILE1","size":"$size","md5Checksum":"$md5","headRevisionId":"$rev","modifiedTime":"2026-10-30T10:00:00.000Z"}""")
+
+    /** Huella del parcial [dest], como la deja una descarga cortada de esa versión. */
+    private fun stamp(dest: File, size: Long = 10, md5: String = "m1", rev: String = "r1") =
+        DriveRestApi.writePartialVersion(DriveRestApi.partialVersionFile(dest), PartialVersion("FILE1", rev, md5, size))
+
+    /** Comprueba que la petición es la de la versión (sin alt=media) y la consume. */
+    private fun takeMetaRequest() {
+        val r = server.takeRequest()
+        assertEquals("/drive/v3/files/FILE1", r.url.encodedPath)
+        assertNull(r.url.queryParameter("alt"))
+        assertEquals(DriveRestApi.VERSION_FIELDS, r.url.queryParameter("fields"))
+    }
+
     @Test
     fun listChildren_pagina_hasta_agotar_y_parsea_campos() = runTest {
         server.enqueue(
@@ -150,6 +166,8 @@ class DriveRestApiTest {
     @Test
     fun download_reanuda_con_Range_y_anade_al_final() = runTest {
         val dest = tmp.newFile("tomo.cbz").apply { writeText("01234") }
+        stamp(dest)
+        server.enqueue(meta())
         server.enqueue(
             MockResponse.Builder().code(206)
                 .addHeader("Content-Range", "bytes 5-9/10")
@@ -161,6 +179,7 @@ class DriveRestApiTest {
         api(FakeTokens("t1")).download("FILE1", dest, resume = true) { b, t -> progress += b to t }
 
         assertEquals("0123456789", dest.readText())
+        takeMetaRequest()
         val req = server.takeRequest()
         assertEquals("bytes=5-", req.headers["Range"])
         assertEquals("/drive/v3/files/FILE1", req.url.encodedPath)
@@ -173,21 +192,28 @@ class DriveRestApiTest {
     @Test
     fun download_200_ante_Range_reescribe_desde_cero() = runTest {
         val dest = tmp.newFile("tomo.cbr").apply { writeText("XXXXX") }
+        stamp(dest)
+        server.enqueue(meta())
         server.enqueue(MockResponse.Builder().code(200).body("0123456789").build())
+        var first = -1L
 
-        api(FakeTokens("t1")).download("FILE1", dest)
+        api(FakeTokens("t1")).download("FILE1", dest) { b, _ -> if (first < 0) first = b }
 
+        takeMetaRequest()
         assertEquals("bytes=5-", server.takeRequest().headers["Range"])
+        assertEquals("el primer progreso dice desde qué byte sirvió el servidor", 0L, first)
         assertEquals("0123456789", dest.readText())
     }
 
     @Test
     fun download_sin_resume_no_manda_Range_y_trunca() = runTest {
         val dest = tmp.newFile("tomo.cbr").apply { writeText("XXXXXXXXXXXXXXXXXXXX") }
+        server.enqueue(meta(size = 3))
         server.enqueue(MockResponse.Builder().code(200).body("abc").build())
 
         api(FakeTokens("t1")).download("FILE1", dest, resume = false)
 
+        takeMetaRequest()
         assertNull(server.takeRequest().headers["Range"])
         assertEquals("abc", dest.readText())
     }
@@ -195,6 +221,8 @@ class DriveRestApiTest {
     @Test
     fun download_416_con_mismo_tamano_es_completo() = runTest {
         val dest = tmp.newFile("tomo.cbz").apply { writeText("0123456789") }
+        stamp(dest)
+        server.enqueue(meta())
         server.enqueue(MockResponse.Builder().code(416).addHeader("Content-Range", "bytes */10").build())
         var last: Pair<Long, Long?>? = null
 
@@ -202,17 +230,21 @@ class DriveRestApiTest {
 
         assertEquals("0123456789", dest.readText())
         assertEquals(10L to 10L, last)
-        assertEquals(1, server.requestCount)
+        assertEquals(2, server.requestCount)
     }
 
     @Test
     fun download_416_con_tamano_distinto_empieza_de_cero() = runTest {
+        // Metadatos y huella dicen 12 bytes, pero el servidor contesta 416 con 10: gana lo que dice la descarga.
         val dest = tmp.newFile("tomo.cbz").apply { writeText("0123456789AB") }
+        stamp(dest, size = 12)
+        server.enqueue(meta(size = 12))
         server.enqueue(MockResponse.Builder().code(416).addHeader("Content-Range", "bytes */10").build())
         server.enqueue(MockResponse.Builder().code(200).body("nuevo").build())
 
         api(FakeTokens("t1")).download("FILE1", dest)
 
+        takeMetaRequest()
         assertEquals("bytes=12-", server.takeRequest().headers["Range"])
         assertNull(server.takeRequest().headers["Range"])
         assertEquals("nuevo", dest.readText())
@@ -221,11 +253,13 @@ class DriveRestApiTest {
     @Test
     fun download_abusivo_reintenta_una_vez_con_acknowledgeAbuse() = runTest {
         val dest = File(tmp.root, "sub/dir/tomo.cbz")
+        server.enqueue(meta(size = 2))
         server.enqueue(error(403, "cannotDownloadAbusiveFile"))
         server.enqueue(MockResponse.Builder().code(200).body("ok").build())
 
         api(FakeTokens("t1")).download("FILE1", dest)
 
+        takeMetaRequest()
         assertNull(server.takeRequest().url.queryParameter("acknowledgeAbuse"))
         val second = server.takeRequest()
         assertEquals("true", second.url.queryParameter("acknowledgeAbuse"))
@@ -350,6 +384,7 @@ class DriveRestApiTest {
         val content = Random(7).nextBytes(256 * 1024)
         server.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse {
+                if (request.url.queryParameter("alt") == null) return meta(size = content.size.toLong())
                 val range = request.headers["Range"]
                 return if (range == null) {
                     // Primer intento: lento, para cancelarlo a medias.
@@ -382,9 +417,90 @@ class DriveRestApiTest {
 
         api.download("FILE1", dest)
 
-        server.takeRequest()
+        takeMetaRequest()
+        assertNull(server.takeRequest().headers["Range"]) // la primera, la cortada
+        takeMetaRequest()
         assertEquals("bytes=${partial.size}-", server.takeRequest().headers["Range"])
         assertArrayEquals(content, dest.readBytes())
+    }
+
+    @Test
+    fun download_deja_la_huella_de_la_version_junto_al_destino() = runTest {
+        val dest = File(tmp.root, "nuevo.cbr")
+        server.enqueue(meta(size = 3, md5 = "abc123", rev = "rev9"))
+        server.enqueue(MockResponse.Builder().code(200).body("abc").build())
+
+        api(FakeTokens("t1")).download("FILE1", dest)
+
+        val saved = DriveRestApi.readPartialVersion(DriveRestApi.partialVersionFile(dest))
+        assertEquals(PartialVersion("FILE1", "rev9", "abc123", 3, "2026-10-30T10:00:00.000Z"), saved)
+    }
+
+    @Test
+    fun download_parcial_de_otra_version_se_descarta_y_no_pide_Range() = runTest {
+        // AD-1: se cortó «Tomo 1» a 5 bytes; luego rclone subió otra versión (mismo id, otro md5 y otra revisión).
+        val dest = tmp.newFile("tomo.cbr").apply { writeText("VIEJO") }
+        stamp(dest, size = 10, md5 = "viejo", rev = "r1")
+        server.enqueue(meta(size = 10, md5 = "nuevo", rev = "r2"))
+        server.enqueue(MockResponse.Builder().code(200).body("0123456789").build())
+        var first = -1L
+
+        api(FakeTokens("t1")).download("FILE1", dest) { b, _ -> if (first < 0) first = b }
+
+        takeMetaRequest()
+        assertNull("no se reanuda sobre bytes de otra versión", server.takeRequest().headers["Range"])
+        assertEquals("0123456789", dest.readText())
+        assertEquals(0L, first)
+        assertEquals("nuevo", DriveRestApi.readPartialVersion(DriveRestApi.partialVersionFile(dest))?.md5Checksum)
+    }
+
+    @Test
+    fun download_parcial_sin_huella_empieza_de_cero() = runTest {
+        val dest = tmp.newFile("tomo.cbr").apply { writeText("01234") }
+        server.enqueue(meta())
+        server.enqueue(MockResponse.Builder().code(200).body("0123456789").build())
+
+        api(FakeTokens("t1")).download("FILE1", dest)
+
+        takeMetaRequest()
+        assertNull(server.takeRequest().headers["Range"])
+        assertEquals("0123456789", dest.readText())
+    }
+
+    @Test
+    fun staleReason_compara_revision_md5_y_tamano_pero_no_modifiedTime() {
+        val v = PartialVersion("F", "r1", "m1", 10, "2026-10-01T00:00:00Z")
+        assertNull(DriveRestApi.staleReason(v, v.copy(modifiedTime = "2026-10-30T00:00:00Z"), 5))
+        assertTrue(DriveRestApi.staleReason(null, v, 5)!!.contains("huella"))
+        assertTrue(DriveRestApi.staleReason(v.copy(fileId = "G"), v, 5)!!.contains("otro fichero"))
+        assertTrue(DriveRestApi.staleReason(v, v.copy(headRevisionId = "r2"), 5)!!.contains("revisión"))
+        assertTrue(DriveRestApi.staleReason(v, v.copy(md5Checksum = "m2"), 5)!!.contains("md5"))
+        assertTrue(DriveRestApi.staleReason(v, v.copy(size = 11), 5)!!.contains("tamaño"))
+        assertTrue(DriveRestApi.staleReason(v, v, 11)!!.contains("más bytes"))
+        val blind = PartialVersion("F", null, null, 10)
+        assertTrue(DriveRestApi.staleReason(blind, blind, 5)!!.contains("no se puede comprobar"))
+    }
+
+    @Test
+    fun head_pide_Range_de_los_primeros_bytes() = runTest {
+        val content = Random(3).nextBytes(4096)
+        server.enqueue(
+            MockResponse.Builder().code(206)
+                .addHeader("Content-Range", "bytes 0-1023/4096")
+                .body(Buffer().write(content, 0, 1024))
+                .build(),
+        )
+        server.enqueue(MockResponse.Builder().code(200).body(Buffer().write(content)).build())
+        val api = api(FakeTokens("t1"))
+
+        assertArrayEquals(content.copyOf(1024), api.head("FILE1"))
+        // Si el servidor ignora el Range, se leen igual solo los primeros bytes.
+        assertArrayEquals(content.copyOf(16), api.head("FILE1", 16))
+
+        val r = server.takeRequest()
+        assertEquals("bytes=0-1023", r.headers["Range"])
+        assertEquals("media", r.url.queryParameter("alt"))
+        assertEquals("bytes=0-15", server.takeRequest().headers["Range"])
     }
 
     @Test

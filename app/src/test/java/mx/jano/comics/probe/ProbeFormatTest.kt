@@ -77,4 +77,22 @@ class ProbeFormatTest {
         assertEquals(listOf(0, 1, 2), ProbeFormat.probePages(3))
         assertEquals(listOf(0, 12, 23), ProbeFormat.probePages(24))
     }
+
+    @Test
+    fun pagina_hacia_atras() {
+        assertNull(ProbeFormat.backwardProbePage(3))
+        assertEquals(1, ProbeFormat.backwardProbePage(4))
+        assertEquals(29, ProbeFormat.backwardProbePage(60))
+        assertFalse(ProbeFormat.probePages(60).contains(29))
+    }
+
+    @Test
+    fun veredicto_de_la_reanudacion() {
+        assertTrue(ProbeFormat.resumeVerdict(500, 500, 100).startsWith("reanudó: sí. Range honrado"))
+        assertTrue(ProbeFormat.resumeVerdict(500, 500, 0).startsWith("reanudó: sí, sin bajar nada"))
+        // C1: un 200 que reescribe desde cero da el mismo tamaño y md5 que un 206, pero no es reanudar.
+        assertTrue(ProbeFormat.resumeVerdict(500, 0, 1000).startsWith("reanudó: NO."))
+        assertTrue(ProbeFormat.resumeVerdict(500, 200, 10).startsWith("reanudó: NO como se esperaba"))
+        assertTrue(ProbeFormat.resumeVerdict(500, -1, 10).startsWith("reanudó: ¿?"))
+    }
 }

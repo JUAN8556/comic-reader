@@ -17,7 +17,7 @@ internal class PdfComicArchive private constructor(
     private val source: File,
     private val descriptor: ParcelFileDescriptor,
     private val renderer: PdfRenderer,
-    private val targetWidthPx: Int,
+    internal val targetWidthPx: Int,
 ) : ComicArchive {
 
     private val lock = Any()

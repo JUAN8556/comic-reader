@@ -59,4 +59,27 @@ object ProbeFormat {
     /** Índices que mide «Abrir archivo»: la primera, la del medio y la última, sin repetir. */
     fun probePages(pageCount: Int): List<Int> =
         if (pageCount <= 0) emptyList() else listOf(0, pageCount / 2, pageCount - 1).distinct()
+
+    /**
+     * Página que «Abrir archivo» extrae al final yendo HACIA ATRÁS (la anterior a la del medio): en un sólido debe
+     * ser un acierto de la caché; sin caché, junrar reiniciaría desde la primera entrada. null con menos de 4 páginas.
+     */
+    fun backwardProbePage(pageCount: Int): Int? = if (pageCount >= 4) pageCount / 2 - 1 else null
+
+    /**
+     * Veredicto de la reanudación (incógnita 2). [requestedFrom] = bytes que había en disco; [firstByte] = el primer
+     * progreso que dio la descarga, que es el byte desde el que escribió (206: el pedido; 200 o parcial descartado: 0;
+     * −1 si no hubo progreso); [newBytes] = bytes bajados en esta sesión.
+     */
+    fun resumeVerdict(requestedFrom: Long, firstByte: Long, newBytes: Long): String = when {
+        firstByte < 0 -> "reanudó: ¿? (sin progreso registrado: no se sabe desde qué byte sirvió el servidor)"
+        firstByte == requestedFrom && newBytes == 0L ->
+            "reanudó: sí, sin bajar nada (el servidor dijo con 416 que ya estaba completo)"
+        firstByte == requestedFrom ->
+            "reanudó: sí. Range honrado: el servidor sirvió desde el byte $requestedFrom (206 + Content-Range)"
+        firstByte == 0L ->
+            "reanudó: NO. La descarga empezó en el byte 0 (el motivo está en la línea «drive:» de arriba: " +
+                "parcial de otra versión, 200 sin Range o Content-Range inesperado)"
+        else -> "reanudó: NO como se esperaba (se pidió desde el byte $requestedFrom y se escribió desde el $firstByte)"
+    }
 }

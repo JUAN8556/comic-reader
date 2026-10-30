@@ -80,21 +80,35 @@ internal class RarComicArchive private constructor(
     /** Veces que se pidió una entrada al motor por la caché de sólidos. */
     internal val solidDecompressCalls: Int get() = stager?.decompressCalls ?: 0
 
+    /** Solo pruebas: envuelve la salida que recibe junrar (p. ej. para simular un disco lleno). */
+    internal var sinkDecoratorForTests: ((OutputStream) -> OutputStream)? = null
+
+    /**
+     * Fallo de E/S al ESCRIBIR la página (disco lleno…), no al leer el archivo. junrar envuelve cualquier excepción
+     * de `extractFile` en [RarException] (comprobado con `javap -c`: la tabla de excepciones captura
+     * `java.lang.Exception`), así que sin esto un disco lleno se contaría como «archivo dañado».
+     */
+    private var sinkFailure: IOException? = null
+
     override fun extractPage(index: Int, dest: File) {
         val page = pages[index]
         synchronized(lock) {
             if (closed) throw IOException(ArchiveTexts.closed(source))
+            sinkFailure = null
             try {
                 if (stager == null) {
                     if (canReadStoredDirectly(page.handle)) {
                         writeAtomically(dest) { out -> copyStored(page.handle, out) }
                     } else {
-                        writeAtomically(dest) { out -> archive.extractFile(page.handle, out) }
+                        writeAtomically(dest) { out -> archive.extractFile(page.handle, junrarSink(out)) }
                     }
                 } else {
                     deliver(stager.stage(stagingDirFor(dest), index), dest)
                 }
             } catch (e: RarException) {
+                // Cerrado desde otro hilo a media extracción: el canal cerrado no es un archivo dañado.
+                if (closed) throw IOException(ArchiveTexts.closed(source), e)
+                sinkFailure?.let { throw IOException(ArchiveTexts.writeFailed(source, index + 1, it.message), it) }
                 throw mapRarException(e, kind, source, options.effectiveMaxDictionary())
             } catch (e: ComicArchiveException) {
                 throw e
@@ -109,7 +123,26 @@ internal class RarComicArchive private constructor(
     }
 
     private fun decompressEntry(entryIndex: Int, out: OutputStream) {
-        archive.extractFile(allHeaders[entryIndex], out)
+        archive.extractFile(allHeaders[entryIndex], junrarSink(out))
+    }
+
+    /** La salida que se le da a junrar: apunta en [sinkFailure] cualquier IOException al escribir y la relanza. */
+    private fun junrarSink(out: OutputStream): OutputStream =
+        RecordingSink(sinkDecoratorForTests?.invoke(out) ?: out) { sinkFailure = it }
+
+    private class RecordingSink(private val target: OutputStream, private val onFailure: (IOException) -> Unit) :
+        OutputStream() {
+        private inline fun <T> recording(block: () -> T): T = try {
+            block()
+        } catch (e: IOException) {
+            onFailure(e)
+            throw e
+        }
+
+        override fun write(b: Int) = recording { target.write(b) }
+        override fun write(b: ByteArray, off: Int, len: Int) = recording { target.write(b, off, len) }
+        override fun flush() = recording { target.flush() }
+        override fun close() = recording { target.close() }
     }
 
     /**

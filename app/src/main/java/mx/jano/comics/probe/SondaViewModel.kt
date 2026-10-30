@@ -22,23 +22,32 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import mx.jano.comics.BuildConfig
+import mx.jano.comics.archive.ArchiveHeaders
 import mx.jano.comics.archive.ArchiveSniffer
 import mx.jano.comics.archive.ComicArchive
 import mx.jano.comics.archive.ComicArchives
+import mx.jano.comics.archive.describeExtraction
+import mx.jano.comics.archive.engineDiagnostics
+import mx.jano.comics.archive.extractionCounters
+import mx.jano.comics.archive.solidAccordingToEngine
 import mx.jano.comics.auth.AuthProviders
 import mx.jano.comics.auth.NeedsConsentException
+import mx.jano.comics.auth.PlayServicesTokenProvider
 import mx.jano.comics.auth.TokenProvider
-import mx.jano.comics.drive.DriveApi
 import mx.jano.comics.drive.DriveApis
 import mx.jano.comics.drive.DriveFile
 import mx.jano.comics.drive.DriveHttpException
+import mx.jano.comics.drive.DriveRestApi
+import mx.jano.comics.drive.rest
 import mx.jano.comics.reader.PageFiles
+import mx.jano.comics.reader.ReaderTrace
 import java.io.File
 import java.security.MessageDigest
 import java.time.Instant
 import java.time.ZoneId
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
+import kotlin.concurrent.thread
 
 /** Progreso de la descarga para la pantalla: bytes en disco, total esperado y velocidad ya formateada. */
 data class DownloadProgress(val bytes: Long, val total: Long?, val speed: String)
@@ -55,6 +64,8 @@ data class SondaUiState(
     val firstTokenInfo: String? = null,
     val sample: DriveFile? = null,
     val candidates: List<DriveFile> = emptyList(),
+    /** Formato real por cabecera de cada candidato (id → «RAR5 sólido»…), tras «Mirar cabeceras». */
+    val heads: Map<String, String> = emptyMap(),
     val localBytes: Long = 0L,
     val downloading: Boolean = false,
     val progress: DownloadProgress? = null,
@@ -66,7 +77,8 @@ data class SondaUiState(
 /**
  * Estado y trabajo de la sonda. Vive en un ViewModel para sobrevivir al giro; todo lo lento va a Dispatchers.IO
  * dentro de [runTask], que registra clase + mensaje de cualquier excepción (también los TODO del contrato).
- * Una tarea a la vez: los botones se apagan mientras hay una en marcha; «Cortar» cancela la descarga.
+ * Una tarea a la vez: los botones se apagan mientras hay una en marcha (salvo «Vigilancia de ajustes» y «Copiar
+ * registro», que no compiten con nada); «Cortar» cancela la descarga.
  */
 class SondaViewModel(app: Application) : AndroidViewModel(app) {
     private val ctx: Context get() = getApplication()
@@ -80,7 +92,7 @@ class SondaViewModel(app: Application) : AndroidViewModel(app) {
     val ui: StateFlow<SondaUiState> = _ui.asStateFlow()
 
     private var tokens: TokenProvider? = null
-    private var drive: DriveApi? = null
+    private var drive: DriveRestApi? = null
     private var work: Job? = null
     private var consentShownAt = 0L
     private val watcher = SettingsWatcher(app.contentResolver) { table, key -> onSettingChanged(table, key) }
@@ -95,6 +107,11 @@ class SondaViewModel(app: Application) : AndroidViewModel(app) {
     fun probeDevice() = runTask(TASK_DEVICE) {
         DeviceProbe.run(ctx, log)
         if (!watcher.isActive) withContext(Dispatchers.Main) { startWatching() }
+    }
+
+    /** Solo las 13 claves NXTPAPER, al momento: se pulsa una vez en cada modo (Normal, Color Paper, Ink Paper). */
+    fun readInkMode() = runTask(TASK_INK) {
+        DeviceProbe.logKnownKeys(ctx.contentResolver, log, "NXTPAPER ahora (apunta en qué modo está la tablet):")
     }
 
     fun toggleWatch() {
@@ -131,7 +148,9 @@ class SondaViewModel(app: Application) : AndroidViewModel(app) {
         log.line("scopes que se piden: ${it.scopes.joinToString(", ")}")
     }
 
-    private fun driveApi(): DriveApi = drive ?: DriveApis.rest(tokenProvider()).also { drive = it }
+    /** Con las trazas HTTP (206/200/416, 401, cuota, KB/s, versión del parcial) también en sonda.log, no solo en logcat. */
+    private fun driveApi(): DriveRestApi =
+        drive ?: DriveApis.rest(tokenProvider(), log = { log.line("drive: $it") }).also { drive = it }
 
     fun connect() = runTask(TASK_CONNECT) { requestToken(forceRefresh = false, label = TASK_CONNECT) }
 
@@ -151,7 +170,27 @@ class SondaViewModel(app: Application) : AndroidViewModel(app) {
         } catch (e: NeedsConsentException) {
             log.line("$label: HIZO FALTA PANTALLA de consentimiento (lo supo en ${elapsed() - t0} ms, forceRefresh=$forceRefresh)")
             askConsent(e)
+        } finally {
+            logAuthState(provider)
         }
+    }
+
+    /**
+     * Lo que Play Services dejó guardado (sin el token ni el correo): cuenta fijada, scopes concedidos y fechas del
+     * consentimiento y del último token silencioso. Así el día 8 queda en sonda.log desde cuándo cuenta la prueba.
+     */
+    private fun logAuthState(provider: TokenProvider) {
+        val d = (provider as? PlayServicesTokenProvider)?.diagnostics() ?: return
+        val now = System.currentTimeMillis()
+        fun ago(at: Long?, none: String) = at?.let { "${fmtDate(it)}, hace ${ProbeFormat.days(now - it)}" } ?: none
+        val granted = d.grantedScopes.sorted()
+        log.line(
+            "autorización guardada: cuenta fijada ${if (d.accountName != null) "sí" else "no"} · " +
+                "scopes concedidos (${granted.size}): ${granted.joinToString(", ").ifEmpty { "ninguno guardado" }} · " +
+                "consentimiento: ${ago(d.consentAtMillis, "sin fecha")} · último token silencioso: ${ago(d.lastSilentAtMillis, "nunca")}",
+        )
+        val missing = provider.scopes.filterNot { it in d.grantedScopes }
+        if (granted.isNotEmpty() && missing.isNotEmpty()) log.line("FALTAN scopes (según lo guardado): ${missing.joinToString(", ")}")
     }
 
     private fun askConsent(e: NeedsConsentException) {
@@ -209,6 +248,7 @@ class SondaViewModel(app: Application) : AndroidViewModel(app) {
         val ms = elapsed() - t0
         log.line("tras consentir: token obtenido (${token.length} caracteres) en $ms ms")
         onTokenOk("consentido; token en $ms ms")
+        logAuthState(provider)
     }
 
     /** Guarda la fecha del primer token (para la prueba de los 8 días) y actualiza el estado. */
@@ -307,22 +347,58 @@ class SondaViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * Formato real de cada candidato por su cabecera (1 KB con Range), sin descargarlo: para dar con un RAR5,
+     * un sólido o un ZIP disfrazado en vez de elegir a ciegas por la extensión.
+     */
+    fun sniffCandidates() = runTask(TASK_HEADS) {
+        val list = _ui.value.candidates
+        if (list.isEmpty()) {
+            log.line("no hay candidatos: primero «$TASK_LIST»")
+            return@runTask
+        }
+        val api = driveApi()
+        val counts = linkedMapOf<String, Int>()
+        val t0 = elapsed()
+        list.forEachIndexed { i, f ->
+            try {
+                val h = timed { api.head(f.id, ArchiveHeaders.HEAD_BYTES) }
+                val kind = ArchiveHeaders.describe(h.value)
+                counts[kind] = (counts[kind] ?: 0) + 1
+                _ui.update { it.copy(heads = it.heads + (f.id to kind)) }
+                log.line("  ${i + 1}/${list.size} «${f.name}»: $kind (${h.value.size} bytes en ${h.ms} ms)")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: DriveHttpException) {
+                log.line("  ${i + 1}/${list.size} «${f.name}»: ERROR HTTP ${e.code} ${e.reason ?: ""}")
+            } catch (t: Throwable) {
+                log.error("  ${i + 1}/${list.size} «${f.name}»", t)
+            }
+        }
+        log.line("cabeceras: ${counts.entries.joinToString(", ") { "${it.key} × ${it.value}" }} en ${elapsed() - t0} ms")
+    }
+
     /** Toque en la lista de candidatos. */
     fun selectSample(file: DriveFile) {
         if (_ui.value.busy != null) {
             log.line("elige otra muestra cuando acabe «${_ui.value.busy}»")
             return
         }
-        closeArchive()
-        useSample(file)
+        // Cerrar el archivo puede esperar a que acabe una extracción del lector (un PDF: segundos): nunca en el hilo
+        // principal, que se congelaría (o daría ANR). Va en Dispatchers.IO, como al abrir o borrar.
+        runTask(TASK_SELECT) {
+            closeArchive()
+            useSample(file)
+        }
     }
 
     private fun useSample(f: DriveFile) {
         val local = destFor(f).let { if (it.isFile) it.length() else 0L }
         _ui.update { it.copy(sample = f, localBytes = local, progress = null) }
+        val head = _ui.value.heads[f.id]?.let { " · cabecera $it" } ?: ""
         log.line(
             "muestra: «${f.name}» · id ${f.id} · ${f.size?.let(ProbeFormat::mb) ?: "?"} · ${f.mimeType} · " +
-                "md5 ${if (f.md5Checksum != null) "sí" else "no"} · en disco ${ProbeFormat.mb(local)}",
+                "md5 ${if (f.md5Checksum != null) "sí" else "no"} · en disco ${ProbeFormat.mb(local)}$head",
         )
     }
 
@@ -351,8 +427,12 @@ class SondaViewModel(app: Application) : AndroidViewModel(app) {
                 offset = 0L
             }
             log.line(
-                if (offset > 0) "reanuda desde el byte $offset (${ProbeFormat.mb(offset)}) con Range: bytes=$offset-"
-                else "descarga desde cero: «${sample.name}»",
+                if (offset > 0) {
+                    "hay $offset bytes (${ProbeFormat.mb(offset)}) en disco: se intenta reanudar " +
+                        "(el cliente comprueba que la versión en Drive es la del parcial y pide Range: bytes=$offset-)"
+                } else {
+                    "descarga desde cero: «${sample.name}»"
+                },
             )
             _ui.update { it.copy(downloading = true, progress = DownloadProgress(offset, size, "— MB/s")) }
             val t0 = elapsed()
@@ -376,11 +456,14 @@ class SondaViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 val ms = elapsed() - t0
                 val len = dest.length()
-                val got = len - offset
+                // El primer progreso es el byte desde el que se escribió: el pedido si hubo 206, 0 si se empezó de cero.
+                val servedFrom = if (firstBytes >= 0) firstBytes else offset
+                val got = len - servedFrom
                 log.line(
                     "descarga terminada: ${ProbeFormat.mb(got)} nuevos en ${ProbeFormat.seconds(ms)} " +
                         "(${ProbeFormat.mbPerSecond(got, ms)}); en disco $len bytes",
                 )
+                if (offset > 0) log.line(ProbeFormat.resumeVerdict(offset, firstBytes, got))
                 when {
                     size == null -> log.line("Drive no dio tamaño: no se compara")
                     len == size -> log.line("tamaño coincide con Drive ($size bytes)")
@@ -420,6 +503,7 @@ class SondaViewModel(app: Application) : AndroidViewModel(app) {
             val dest = destFor(sample)
             val had = if (dest.isFile) dest.length() else 0L
             dest.delete()
+            DriveRestApi.partialVersionFile(dest).delete()
             File(workDir, "paginas/${sample.id}").deleteRecursively()
             File(workDir, "extraccion/${sample.id}").deleteRecursively()
             _ui.update { it.copy(localBytes = 0L, progress = null) }
@@ -445,50 +529,85 @@ class SondaViewModel(app: Application) : AndroidViewModel(app) {
                 log.line("ojo: el fichero está incompleto (${file.length()} de $size bytes)")
             }
             closeArchive()
-
-            val sniff = timed { ArchiveSniffer.sniff(file) }
-            log.line("sniff: ${sniff.value} en ${sniff.ms} ms (extensión .${file.extension}, ${ProbeFormat.mb(file.length())})")
-
-            val heapBefore = usedHeap()
-            val opened = timed { ComicArchives.open(file) }
-            val arch = opened.value
-            // Se guarda ya para poder cerrarlo aunque falle lo que sigue.
-            _ui.update { it.copy(opened = OpenedArchive(sample.id, sample.name, arch, "${arch.kind} (abriendo)")) }
-            val n = arch.pageCount
-            log.line("open: ${arch.kind}, $n páginas en ${opened.ms} ms")
-            val shown = minOf(n, 12)
-            if (shown > 0) {
-                log.line("primeras $shown páginas en el orden del archivo:")
-                for (i in 0 until shown) log.line("  ${i + 1}. ${arch.pageName(i)}")
-            }
-
-            val outDir = File(workDir, "extraccion/${sample.id}").apply {
-                deleteRecursively()
-                mkdirs()
-            }
-            for (i in ProbeFormat.probePages(n)) {
-                try {
-                    val name = arch.pageName(i)
-                    val dest = PageFiles.fileFor(outDir, i, name)
-                    val t = timed { synchronized(arch) { arch.extractPage(i, dest) } }
-                    log.line("  extraer pág. ${i + 1}/$n «$name»: ${t.ms} ms, ${dest.length() / 1024} KB, ${imageInfo(dest)}")
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (t: Throwable) {
-                    log.error("  extraer pág. ${i + 1}/$n", t)
-                }
-            }
-            log.line("memoria Java usada: ${ProbeFormat.mb(usedHeap())} (antes de abrir: ${ProbeFormat.mb(heapBefore)})")
-            val summary = "${arch.kind} · $n páginas · abrir en ${opened.ms} ms"
-            _ui.update { it.copy(opened = OpenedArchive(sample.id, sample.name, arch, summary)) }
+            probeArchive(file, sample.id, sample.name)
         }
     }
 
+    /**
+     * RAR4 sólido generado en la tablet (60 páginas JPEG guardadas): en la biblioteca no hay ninguno. Mide el camino
+     * sólido de junrar y la caché de sólidos en el G100, no la descompresión LZ de un sólido comprimido.
+     */
+    fun openSyntheticSolid() = runTask(TASK_SYNTHETIC) {
+        closeArchive()
+        val made = timed { SyntheticComic.ensure(File(workDir, "sintetico")) { log.line(it) } }
+        log.line("sólido sintético listo en ${made.ms} ms: ${made.value.name}")
+        probeArchive(made.value, SyntheticComic.ID, made.value.name)
+    }
+
+    /** sniff + open + las páginas de prueba con su vía (junrar, directa, caché de sólidos) y lo que dice el motor. */
+    private fun probeArchive(file: File, id: String, name: String) {
+        val sniff = timed { ArchiveSniffer.sniff(file) }
+        log.line(
+            "sniff: ${sniff.value} en ${sniff.ms} ms (cabecera: ${ArchiveHeaders.describe(file)}; " +
+                "extensión .${file.extension}, ${ProbeFormat.mb(file.length())})",
+        )
+
+        val heapBefore = usedHeap()
+        val opened = timed { ComicArchives.open(file) }
+        val arch = opened.value
+        // Se guarda ya para poder cerrarlo aunque falle lo que sigue.
+        _ui.update { it.copy(opened = OpenedArchive(id, name, arch, "${arch.kind} (abriendo)")) }
+        val n = arch.pageCount
+        log.line("open: ${arch.kind}, $n páginas en ${opened.ms} ms")
+        log.line("motor: ${arch.engineDiagnostics()}")
+        val shown = minOf(n, 12)
+        if (shown > 0) {
+            log.line("primeras $shown páginas en el orden del archivo:")
+            for (i in 0 until shown) log.line("  ${i + 1}. ${arch.pageName(i)}")
+        }
+
+        val outDir = File(workDir, "extraccion/$id").apply {
+            deleteRecursively()
+            mkdirs()
+        }
+        val probes = ProbeFormat.probePages(n).map { it to "" } +
+            listOfNotNull(ProbeFormat.backwardProbePage(n)?.let { it to " (hacia atrás)" })
+        for ((i, note) in probes) {
+            try {
+                val pageName = arch.pageName(i)
+                val dest = PageFiles.fileFor(outDir, i, pageName)
+                val before = arch.extractionCounters()
+                val t = timed { synchronized(arch) { arch.extractPage(i, dest) } }
+                val via = arch.describeExtraction(before, arch.extractionCounters())
+                log.line(
+                    "  extraer pág. ${i + 1}/$n$note «$pageName»: ${t.ms} ms, ${dest.length() / 1024} KB, " +
+                        "${imageInfo(dest)} · vía $via",
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                log.error("  extraer pág. ${i + 1}/$n$note", t)
+            }
+        }
+        log.line("motor tras extraer: ${arch.engineDiagnostics()}")
+        log.line("memoria Java usada: ${ProbeFormat.mb(usedHeap())} (antes de abrir: ${ProbeFormat.mb(heapBefore)})")
+        val solid = if (arch.solidAccordingToEngine() == true) " sólido" else ""
+        val summary = "${arch.kind}$solid · $n páginas · abrir en ${opened.ms} ms"
+        _ui.update { it.copy(opened = OpenedArchive(id, name, arch, summary)) }
+    }
+
+    /**
+     * Cierra el archivo abierto. Se llama dentro de [runTask] (Dispatchers.IO): puede esperar a que acabe una
+     * extracción del lector que siga en marcha. Sin `synchronized(archive)` por fuera: los close() de los tres
+     * formatos ya son seguros entre hilos, y el de RAR cierra primero el canal para abortar la extracción en curso
+     * (con el monitor tomado por fuera tendría que esperar a que acabara).
+     */
     private fun closeArchive() {
         val current = _ui.value.opened ?: return
+        ReaderTrace.sink = null
         _ui.update { it.copy(opened = null, reading = false) }
         try {
-            synchronized(current.archive) { current.archive.close() }
+            current.archive.close()
             log.line("archivo cerrado: «${current.fileName}»")
         } catch (t: Throwable) {
             log.error("cerrar el archivo", t)
@@ -511,11 +630,13 @@ class SondaViewModel(app: Application) : AndroidViewModel(app) {
             log.line("$TASK_READ espera: está en marcha «${_ui.value.busy}»")
             return
         }
+        ReaderTrace.sink = { log.line("lector: $it") }
         _ui.update { it.copy(reading = true) }
         log.line("lector abierto: «${opened.fileName}», ${opened.archive.pageCount} páginas, rtl=${_ui.value.rtl}")
     }
 
     fun stopReading() {
+        ReaderTrace.sink = null
         _ui.update { it.copy(reading = false) }
         log.line("lector cerrado")
     }
@@ -606,7 +727,13 @@ class SondaViewModel(app: Application) : AndroidViewModel(app) {
 
     override fun onCleared() {
         watcher.stop()
-        closeArchive()
+        ReaderTrace.sink = null
+        // viewModelScope ya está cancelado aquí: se cierra en un hilo aparte para no bloquear el principal (UI-1).
+        val current = _ui.value.opened
+        if (current != null) {
+            _ui.update { it.copy(opened = null, reading = false) }
+            thread(name = "sonda-cerrar-archivo", isDaemon = true) { runCatching { current.archive.close() } }
+        }
         super.onCleared()
     }
 
@@ -619,14 +746,18 @@ class SondaViewModel(app: Application) : AndroidViewModel(app) {
         private val DATE: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
 
         const val TASK_DEVICE = "Dispositivo"
+        const val TASK_INK = "Leer modo ahora"
         const val TASK_CONNECT = "Conectar Drive"
         const val TASK_SILENT = "Token silencioso"
         const val TASK_FORCE = "Token nuevo (forceRefresh)"
         const val TASK_CONSENT = "Resultado del consentimiento"
         const val TASK_LIST = "Listar Cómics"
+        const val TASK_HEADS = "Mirar cabeceras"
+        const val TASK_SELECT = "Elegir muestra"
         const val TASK_DOWNLOAD = "Descargar (Range)"
         const val TASK_DELETE = "Borrar del disco"
         const val TASK_OPEN = "Abrir archivo"
+        const val TASK_SYNTHETIC = "Sólido sintético"
         const val TASK_READ = "Leer"
     }
 }

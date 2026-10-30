@@ -42,9 +42,9 @@ class ArchiveSniffTest {
     @Test fun rar4_escrito_de_verdad_con_y_sin_solido() {
         val plain = tmp.newFile("plain.cbr")
         val solid = tmp.newFile("solid.cbr")
-        val entries = listOf(Rar4TestWriter.Entry("1.jpg", byteArrayOf(1, 2, 3)))
-        Rar4TestWriter.write(plain, entries, solid = false)
-        Rar4TestWriter.write(solid, entries, solid = true)
+        val entries = listOf(Rar4StoredWriter.Entry("1.jpg", byteArrayOf(1, 2, 3)))
+        Rar4StoredWriter.write(plain, entries, solid = false)
+        Rar4StoredWriter.write(solid, entries, solid = true)
         assertEquals(ArchiveKind.RAR4, ArchiveSniffer.sniff(plain))
         assertEquals(ArchiveKind.RAR4_SOLID, ArchiveSniffer.sniff(solid))
     }

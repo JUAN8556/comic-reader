@@ -12,8 +12,11 @@ import java.util.zip.CRC32
  * Sirve para probar junrar sin ficheros binarios en el repo y sin el `rar` propietario: el formato de bloques,
  * las CRC y las banderas (MHD_SOLID, LHD_SOLID, LHD_PASSWORD) son los reales; lo único sintético es que no comprime.
  * La CRC16 de cabecera se comprobó contra un RAR real (0x90CF del MAIN_HEAD vacío) y el bloque final (0x3DC4).
+ *
+ * Vive en `main` (no en `test`) porque la sonda genera con él un RAR4 sólido para la tablet («Sólido sintético»):
+ * en la biblioteca no hay ninguno. Las entradas se escriben una a una, así que se pueden generar al vuelo.
  */
-internal object Rar4TestWriter {
+internal object Rar4StoredWriter {
     class Entry(
         val name: String,
         val data: ByteArray = ByteArray(0),
@@ -27,11 +30,11 @@ internal object Rar4TestWriter {
     private const val LHD_DIRECTORY = 0x00E0
     private const val LONG_BLOCK = 0x8000
 
-    fun write(file: File, entries: List<Entry>, solid: Boolean) {
-        BufferedOutputStream(FileOutputStream(file)).use { write(it, entries, solid) }
+    fun write(file: File, entries: Iterable<Entry>, solid: Boolean) {
+        BufferedOutputStream(FileOutputStream(file), 64 * 1024).use { write(it, entries, solid) }
     }
 
-    fun write(out: OutputStream, entries: List<Entry>, solid: Boolean) {
+    fun write(out: OutputStream, entries: Iterable<Entry>, solid: Boolean) {
         out.write(byteArrayOf(0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x00))
         // MAIN_HEAD: HighPosAV(2) + PosAV(4)
         block(out, type = 0x73, flags = if (solid) MHD_SOLID else 0, body = ByteArray(6))

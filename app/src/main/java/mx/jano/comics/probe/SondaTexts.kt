@@ -11,6 +11,9 @@ internal object SondaTexts {
     const val DEVICE_HELP = "Se lee al arrancar. Con la vigilancia activa, cambia de modo con el botón NXTPAPER " +
         "(Color Paper / Ink Paper) y mira en el registro qué ajustes cambian."
     const val DEVICE_REPEAT = "Repetir lectura"
+    const val DEVICE_INK_NOW = "Leer modo ahora"
+    const val DEVICE_INK_HELP = "Pulsa «Leer modo ahora» una vez en cada modo (Normal, Color Paper, Ink Paper): " +
+        "así el valor queda en el registro aunque el cambio no avise."
     const val WATCH_ON = "Vigilancia de ajustes: activa"
     const val WATCH_OFF = "Vigilancia de ajustes: apagada"
 
@@ -24,6 +27,8 @@ internal object SondaTexts {
     const val LIST_RUN = "Listar Cómics"
     const val LIST_EMPTY = "Sin muestra todavía."
     const val LIST_PICK_HELP = "Toca otro para usarlo como muestra:"
+    const val LIST_HEADS = "Mirar cabeceras"
+    const val LIST_HEADS_HELP = "«Mirar cabeceras» baja 1 KB de cada candidato y dice su formato real (RAR4, RAR5, sólido, ZIP…)."
     const val LIST_CHOSEN = "[elegida] "
 
     const val SECTION_DOWNLOAD = "4. Descargar (Range)"
@@ -34,6 +39,9 @@ internal object SondaTexts {
 
     const val SECTION_OPEN = "5. Abrir archivo"
     const val OPEN_RUN = "Abrir archivo"
+    const val OPEN_SYNTHETIC = "Sólido sintético"
+    const val OPEN_SYNTHETIC_HELP = "«Sólido sintético» genera (la primera vez) y abre un RAR4 sólido de 60 páginas: " +
+        "en Drive no hay ninguno. Mide el camino sólido de junrar y la caché, no la descompresión real."
 
     const val SECTION_READ = "6. Leer"
     const val READ_RUN = "Leer"

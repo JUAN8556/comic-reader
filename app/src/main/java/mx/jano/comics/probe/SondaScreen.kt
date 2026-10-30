@@ -143,10 +143,12 @@ private fun Controls(state: SondaUiState, vm: SondaViewModel) {
         Text(SondaTexts.DEVICE_HELP, style = MaterialTheme.typography.bodySmall)
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = vm::probeDevice, enabled = idle) { Text(SondaTexts.DEVICE_REPEAT) }
+            OutlinedButton(onClick = vm::readInkMode, enabled = idle) { Text(SondaTexts.DEVICE_INK_NOW) }
             OutlinedButton(onClick = vm::toggleWatch) {
                 Text(if (state.watching) SondaTexts.WATCH_ON else SondaTexts.WATCH_OFF)
             }
         }
+        Text(SondaTexts.DEVICE_INK_HELP, style = MaterialTheme.typography.bodySmall)
     }
 
     Section(SondaTexts.SECTION_AUTH) {
@@ -164,13 +166,20 @@ private fun Controls(state: SondaUiState, vm: SondaViewModel) {
     }
 
     Section(SondaTexts.SECTION_LIST) {
-        Button(onClick = vm::listComics, enabled = idle) { Text(SondaTexts.LIST_RUN) }
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = vm::listComics, enabled = idle) { Text(SondaTexts.LIST_RUN) }
+            OutlinedButton(onClick = vm::sniffCandidates, enabled = idle && state.candidates.isNotEmpty()) {
+                Text(SondaTexts.LIST_HEADS)
+            }
+        }
         val sample = state.sample
         Text(
             if (sample == null) SondaTexts.LIST_EMPTY
-            else "Muestra: ${sample.name} · ${sample.size?.let(ProbeFormat::mb) ?: "?"}",
+            else "Muestra: ${sample.name} · ${sample.size?.let(ProbeFormat::mb) ?: "?"}" +
+                (state.heads[sample.id]?.let { " · $it" } ?: ""),
             style = MaterialTheme.typography.bodyMedium,
         )
+        if (state.candidates.isNotEmpty()) Text(SondaTexts.LIST_HEADS_HELP, style = MaterialTheme.typography.bodySmall)
         if (state.candidates.size > 1) {
             Text(SondaTexts.LIST_PICK_HELP, style = MaterialTheme.typography.bodySmall)
             Column {
@@ -178,6 +187,7 @@ private fun Controls(state: SondaUiState, vm: SondaViewModel) {
                     val chosen = f.id == sample?.id
                     Text(
                         text = (if (chosen) SondaTexts.LIST_CHOSEN else "") +
+                            (state.heads[f.id]?.let { "[$it] " } ?: "") +
                             "${f.name} · ${f.size?.let(ProbeFormat::mb) ?: "?"}",
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = if (chosen) FontWeight.Bold else FontWeight.Normal,
@@ -221,8 +231,12 @@ private fun Controls(state: SondaUiState, vm: SondaViewModel) {
     }
 
     Section(SondaTexts.SECTION_OPEN) {
-        Button(onClick = vm::openArchive, enabled = idle && state.localBytes > 0) { Text(SondaTexts.OPEN_RUN) }
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = vm::openArchive, enabled = idle && state.localBytes > 0) { Text(SondaTexts.OPEN_RUN) }
+            OutlinedButton(onClick = vm::openSyntheticSolid, enabled = idle) { Text(SondaTexts.OPEN_SYNTHETIC) }
+        }
         state.opened?.let { Text("Abierto: ${it.fileName} · ${it.summary}", style = MaterialTheme.typography.bodyMedium) }
+        Text(SondaTexts.OPEN_SYNTHETIC_HELP, style = MaterialTheme.typography.bodySmall)
     }
 
     Section(SondaTexts.SECTION_READ) {

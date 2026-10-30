@@ -101,10 +101,7 @@ internal object DeviceProbe {
             "animator_duration_scale: ${readSettingDescribed(cr, "global", Settings.Global.ANIMATOR_DURATION_SCALE)}"
         }
 
-        log.line("NXTPAPER: claves que adb vio el 29-oct, leídas desde la app")
-        for ((table, key) in KNOWN_KEYS) {
-            log.line("  $table/$key = ${readSettingDescribed(cr, table, key)}")
-        }
+        logKnownKeys(cr, log, "NXTPAPER: claves que adb vio el 29-oct, leídas desde la app")
         log.line("NXTPAPER: claves candidatas de la investigación (se esperan null) en System, Secure y Global")
         for (table in TABLES) {
             for (key in INK_KEYS) {
@@ -112,6 +109,17 @@ internal object DeviceProbe {
             }
         }
         for (table in TABLES) dumpTable(cr, table, log)
+    }
+
+    /**
+     * Las 13 claves que adb vio, con su valor de ahora. «Leer modo ahora» lo repite en cada modo (Normal, Color Paper,
+     * Ink Paper): así el valor por modo queda en el registro aunque el cambio no dispare ningún aviso de ajustes.
+     */
+    fun logKnownKeys(cr: ContentResolver, log: SondaLog, title: String) {
+        log.line(title)
+        for ((table, key) in KNOWN_KEYS) {
+            log.line("  $table/$key = ${readSettingDescribed(cr, table, key)}")
+        }
     }
 
     /** Lee un ajuste; lanza SecurityException si Android no deja (claves @hide sin @Readable desde Android 12). */

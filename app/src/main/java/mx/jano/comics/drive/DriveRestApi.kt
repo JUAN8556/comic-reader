@@ -35,6 +35,11 @@ import kotlin.random.Random
  * - 403 cannotDownloadAbusiveFile en una descarga → UN reintento con `acknowledgeAbuse=true` (Jano es el dueño).
  * - Lo demás → [DriveHttpException] con el `error.errors[0].reason` del JSON.
  *
+ * Reanudación: antes de cada descarga se pide la versión del fichero (`headRevisionId`, `md5Checksum`, `size`) y se
+ * guarda junto al destino ([partialVersionFile], `<dest>.meta`). Un parcial solo se reanuda con `Range` si su huella
+ * coincide con la versión actual de Drive; si falta o cambió, se borra y se baja desde cero (si no, se pegarían
+ * bytes de la versión nueva detrás de los de la vieja).
+ *
  * Nunca registra la cabecera Authorization ni el token: el [log] solo recibe rutas, códigos, tamaños y tiempos.
  *
  * @param sleeper espera del backoff; los tests la sustituyen para no esperar de verdad.
@@ -107,7 +112,68 @@ class DriveRestApi(
         resume: Boolean,
         onProgress: (bytes: Long, total: Long?) -> Unit,
     ) {
-        dest.absoluteFile.parentFile?.mkdirs()
+        // La versión se pide siempre: valida el parcial y deja la huella para reanudar la próxima vez.
+        val remote = fetchVersion(fileId)
+        withContext(Dispatchers.IO) {
+            dest.absoluteFile.parentFile?.mkdirs()
+            val stamp = partialVersionFile(dest)
+            if (resume && dest.isFile && dest.length() > 0) {
+                val local = dest.length()
+                val stale = staleReason(readPartialVersion(stamp), remote, local)
+                if (stale != null) {
+                    log("download: descarto el parcial de $local bytes ($stale); empiezo de cero")
+                    if (!dest.delete() && dest.exists()) throw IOException("$TEXT_CANNOT_DELETE: $dest")
+                } else {
+                    log("download: el parcial de $local bytes es de la versión actual (${remote.describe()}); se reanuda")
+                }
+            }
+            writePartialVersion(stamp, remote)
+        }
+        downloadMedia(fileId, dest, resume, onProgress)
+    }
+
+    /**
+     * Primeros [bytes] bytes de un fichero (`Range: bytes=0-<bytes-1>`), para saber su formato sin bajarlo entero.
+     * Si el servidor ignora el `Range` (200), se leen los [bytes] primeros y se corta la conexión.
+     */
+    suspend fun head(fileId: String, bytes: Int = HEAD_BYTES): ByteArray {
+        require(bytes > 0) { "bytes debe ser positivo: $bytes" }
+        val url = endpoint("files", fileId) { addQueryParameter("alt", "media") }
+        val headers = mapOf("Accept-Encoding" to "identity", "Range" to "bytes=0-${bytes - 1}")
+        return request(url, headers, accept = { it == 200 || it == 206 }) { resp ->
+            resp.body.byteStream().use { input ->
+                val buf = ByteArray(bytes)
+                var n = 0
+                while (n < bytes) {
+                    val r = input.read(buf, n, bytes - n)
+                    if (r < 0) break
+                    n += r
+                }
+                buf.copyOf(n)
+            }
+        }
+    }
+
+    /** Versión actual del fichero en Drive (lo que identifica su contenido). */
+    private suspend fun fetchVersion(fileId: String): PartialVersion {
+        val url = endpoint("files", fileId) { addQueryParameter("fields", VERSION_FIELDS) }
+        val wire = getJson(url, VersionWire.serializer())
+        return PartialVersion(
+            fileId = fileId,
+            headRevisionId = wire.headRevisionId,
+            md5Checksum = wire.md5Checksum,
+            size = wire.size,
+            modifiedTime = wire.modifiedTime,
+        )
+    }
+
+    /** Descarga `alt=media` a [dest]; si [resume] y hay bytes, pide `Range`. La versión ya se comprobó en [download]. */
+    private suspend fun downloadMedia(
+        fileId: String,
+        dest: File,
+        resume: Boolean,
+        onProgress: (bytes: Long, total: Long?) -> Unit,
+    ) {
         val offset = if (resume && dest.isFile) dest.length() else 0L
         val url = endpoint("files", fileId) { addQueryParameter("alt", "media") }
         // identity: sin gzip, Content-Length y offsets de Range siempre en bytes del fichero real.
@@ -153,7 +219,7 @@ class DriveRestApi(
             is DownloadOutcome.Restart -> {
                 if (!resume) throw DriveHttpException(206, null, "$TEXT_BAD_RANGE: ${outcome.why}")
                 log("download: ${outcome.why}; empiezo de cero")
-                download(fileId, dest, resume = false, onProgress)
+                downloadMedia(fileId, dest, resume = false, onProgress)
             }
         }
     }
@@ -332,12 +398,17 @@ class DriveRestApi(
         const val MAX_BACKOFF_MS = 64_000L
         private const val FOLDER_MIME = "application/vnd.google-apps.folder"
         private const val FILE_FIELDS = "id,name,mimeType,size,md5Checksum,modifiedTime,parents"
+        internal const val VERSION_FIELDS = "id,size,md5Checksum,headRevisionId,modifiedTime"
+
+        /** Lo que lee [head] por defecto: lo que necesita el sniffer de formatos (`archive/ArchiveSniff.kt`). */
+        const val HEAD_BYTES = 1024
         private const val REASON_ABUSIVE = "cannotDownloadAbusiveFile"
         private const val BUFFER_BYTES = 64 * 1024
         private const val MAX_ERROR_BODY = 64L * 1024
 
         private const val TEXT_BAD_RANGE = "Respuesta de rango inválida"
         private const val TEXT_INCOMPLETE = "Descarga incompleta"
+        private const val TEXT_CANNOT_DELETE = "No se pudo borrar el parcial de otra versión"
 
         private val json = Json { ignoreUnknownKeys = true }
 
@@ -367,13 +438,64 @@ class DriveRestApi(
             header?.let { UNSATISFIED_RANGE.find(it) }?.groupValues?.get(1)?.toLongOrNull()
 
         private fun elapsedMs(t0: Long): Long = (System.nanoTime() - t0) / 1_000_000
+
+        /** Huella de la versión de la que salió el parcial [dest]: `<dest>.meta`. Quien borra [dest] puede borrarla. */
+        fun partialVersionFile(dest: File): File = File(dest.path + ".meta")
+
+        internal fun readPartialVersion(stamp: File): PartialVersion? = try {
+            if (stamp.isFile) json.decodeFromString(PartialVersion.serializer(), stamp.readText()) else null
+        } catch (_: Exception) {
+            null // huella rota = sin huella: se vuelve a bajar
+        }
+
+        internal fun writePartialVersion(stamp: File, version: PartialVersion) {
+            stamp.writeText(json.encodeToString(PartialVersion.serializer(), version))
+        }
+
+        /**
+         * Por qué no se puede reanudar un parcial de [localBytes] bytes cuya huella es [saved] contra la versión
+         * [remote] de Drive; null si se puede. Se compara lo que cambia con el contenido (revisión, md5, tamaño),
+         * no `modifiedTime`, que también se mueve con cambios de metadatos.
+         */
+        internal fun staleReason(saved: PartialVersion?, remote: PartialVersion, localBytes: Long): String? = when {
+            saved == null -> "no hay huella de su versión"
+            saved.fileId != remote.fileId -> "la huella es de otro fichero"
+            remote.headRevisionId == null && remote.md5Checksum == null -> "Drive no da revisión ni md5: no se puede comprobar"
+            saved.headRevisionId != remote.headRevisionId -> "la revisión cambió en Drive"
+            saved.md5Checksum != remote.md5Checksum -> "el md5 cambió en Drive"
+            saved.size != remote.size -> "el tamaño cambió en Drive (${saved.size} → ${remote.size})"
+            remote.size != null && localBytes > remote.size -> "en disco hay más bytes ($localBytes) que en Drive (${remote.size})"
+            else -> null
+        }
     }
+}
+
+/** Huella de la versión de un fichero de Drive, guardada junto a su descarga parcial. */
+@Serializable
+internal data class PartialVersion(
+    val fileId: String,
+    val headRevisionId: String? = null,
+    val md5Checksum: String? = null,
+    val size: Long? = null,
+    val modifiedTime: String? = null,
+) {
+    fun describe(): String =
+        "rev ${headRevisionId?.take(12) ?: "?"}, md5 ${md5Checksum?.take(8) ?: "?"}, ${size ?: "?"} bytes"
 }
 
 // --- Formas JSON de la API (solo los campos que se piden en `fields`) ---
 
 @Serializable
 private class FileList(val nextPageToken: String? = null, val files: List<DriveFile> = emptyList())
+
+@Serializable
+private class VersionWire(
+    val id: String? = null,
+    val size: Long? = null,
+    val md5Checksum: String? = null,
+    val headRevisionId: String? = null,
+    val modifiedTime: String? = null,
+)
 
 @Serializable
 private class AboutWire(val user: UserWire? = null, val storageQuota: QuotaWire? = null)

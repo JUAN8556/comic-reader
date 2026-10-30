@@ -217,9 +217,9 @@ class LocalComicsReportTest {
         dir.mkdirs()
         val n = 60
         val size = 1_000_000
-        val entries = (1..n).map { Rar4TestWriter.Entry(String.format(Locale.ROOT, "%03d.jpg", it), Random(it).nextBytes(size)) }
-        val solidFile = File(dir, "solido.cbr").also { Rar4TestWriter.write(it, entries, solid = true) }
-        val plainFile = File(dir, "plano.cbr").also { Rar4TestWriter.write(it, entries, solid = false) }
+        val entries = (1..n).map { Rar4StoredWriter.Entry(String.format(Locale.ROOT, "%03d.jpg", it), Random(it).nextBytes(size)) }
+        val solidFile = File(dir, "solido.cbr").also { Rar4StoredWriter.write(it, entries, solid = true) }
+        val plainFile = File(dir, "plano.cbr").also { Rar4StoredWriter.write(it, entries, solid = false) }
         val lines = mutableListOf<String>()
 
         fun rawPattern(file: File, order: List<Int>): Pair<Double, Double> {
