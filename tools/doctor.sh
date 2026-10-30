@@ -15,7 +15,7 @@ JV=$(java -version 2>&1 | head -1)
 [[ "$JV" == *'"17.'* ]] && ok "JDK $JV" || ko "JDK: $JV (se exige 17)"
 brew list --pinned 2>/dev/null | grep -qx 'openjdk@17' && ok "openjdk@17 fijado en brew" || ko "openjdk@17 sin pin → brew pin openjdk@17"
 
-for p in "platform-tools" "platforms;android-37" "build-tools;36.0.0" "cmdline-tools;latest"; do
+for p in "platform-tools" "platforms;android-37.0" "build-tools;36.0.0" "cmdline-tools;latest"; do
   [[ -d "$ANDROID_HOME/${p//;//}" ]] && ok "SDK $p" || ko "SDK falta $p → make setup"
 done
 [[ -s "$ANDROID_HOME/licenses/android-sdk-license" ]] && ok "licencias del SDK aceptadas" || ko "licencias del SDK sin aceptar"

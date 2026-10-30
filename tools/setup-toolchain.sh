@@ -44,7 +44,7 @@ fi
 log "licencias del SDK (aceptación autorizada por Jano el 29-oct-2026)"
 yes | sdkmanager --licenses >/dev/null 2>&1 || true
 log "instalando platform-tools, platforms;android-36, build-tools;36.0.0"
-sdkmanager --install "platform-tools" "platforms;android-36" "build-tools;36.0.0" >/dev/null
+sdkmanager --install "platform-tools" "platforms;android-37.0" "build-tools;36.0.0" >/dev/null
 sdkmanager --list_installed 2>/dev/null | sed -n '1,20p'
 
 if [[ ! -x "$REPO/gradlew" ]]; then
