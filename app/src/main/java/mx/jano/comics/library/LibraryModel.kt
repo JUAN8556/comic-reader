@@ -109,15 +109,18 @@ interface CoverStore {
 
 /** Los rellena el frente «data». */
 object LibraryFactories {
-    fun repository(context: Context, drive: DriveApi, settings: SettingsStore): LibraryRepository = TODO("mvp/data")
-    fun progressStore(context: Context, drive: DriveApi): ProgressStore = TODO("mvp/data")
-    fun coverStore(context: Context, drive: DriveApi, library: LibraryRepository): CoverStore = TODO("mvp/data")
+    fun repository(context: Context, drive: DriveApi, settings: SettingsStore): LibraryRepository =
+        LibraryWiring.repository(context, drive, settings)
+    fun progressStore(context: Context, drive: DriveApi): ProgressStore =
+        LibraryWiring.progressStore(context, LibraryWiring.appDataFor(drive))
+    fun coverStore(context: Context, drive: DriveApi, library: LibraryRepository): CoverStore =
+        LibraryWiring.coverStore(context, drive, library)
 }
 
 /** Orden natural y «smart naming» (puros, con pruebas JVM). Los rellena el frente «data». */
 object Naming {
     /** Comparador natural: 1, 2, 10; insensible a mayúsculas y acentos. */
-    val natural: Comparator<String> = Comparator { a, b -> TODO("mvp/data") }
+    val natural: Comparator<String> = NaturalComparator
     /** «Uncanny X-Men 174, October 1983.cbr» dentro del estante «Uncanny X-Men» → «174, October 1983». Sin extensión. */
-    fun smartName(fileName: String, folderName: String): String = TODO("mvp/data")
+    fun smartName(fileName: String, folderName: String): String = SmartNames.smartName(fileName, folderName)
 }

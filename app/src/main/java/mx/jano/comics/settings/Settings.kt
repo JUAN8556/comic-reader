@@ -43,5 +43,6 @@ interface SettingsStore {
 
 /** Lo rellena el frente «data». */
 object SettingsFactories {
-    fun store(context: Context): SettingsStore = TODO("mvp/data")
+    /** Una sola instancia por proceso (files/settings.json): dos almacenes sobre el mismo fichero se pisarían. */
+    fun store(context: Context): SettingsStore = JsonSettingsStore.shared(context)
 }

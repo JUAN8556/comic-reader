@@ -18,6 +18,7 @@ import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
 import okhttp3.Response
 import java.io.File
 import java.io.FileOutputStream
@@ -48,7 +49,7 @@ import kotlin.random.Random
 class DriveRestApi(
     private val tokens: TokenProvider,
     private val client: OkHttpClient = defaultClient,
-    private val baseUrl: HttpUrl = DEFAULT_BASE_URL.toHttpUrl(),
+    internal val baseUrl: HttpUrl = DEFAULT_BASE_URL.toHttpUrl(),
     private val sleeper: suspend (millis: Long) -> Unit = { delay(it) },
     private val random: Random = Random.Default,
     private val log: (String) -> Unit = {},
@@ -254,17 +255,21 @@ class DriveRestApi(
         return onDisk - startAt
     }
 
-    private suspend fun <T> getJson(url: HttpUrl, deserializer: DeserializationStrategy<T>): T =
+    internal suspend fun <T> getJson(url: HttpUrl, deserializer: DeserializationStrategy<T>): T =
         request(url) { resp -> json.decodeFromString(deserializer, resp.body.string()) }
 
     /**
-     * Ejecuta un GET con token y aplica la política de reintentos. [onSuccess] recibe la respuesta abierta si
-     * [accept] acepta el código; se ejecuta en Dispatchers.IO.
+     * Ejecuta una petición con token y aplica la política de reintentos. [onSuccess] recibe la respuesta abierta si
+     * [accept] acepta el código; se ejecuta en Dispatchers.IO. Por defecto GET; [method] y [body] valen para las
+     * subidas del appDataFolder ([AppDataRestStore]): el cuerpo tiene que poder reenviarse (bytes en memoria),
+     * porque un 401 o una cuota agotada repiten la petición entera.
      */
-    private suspend fun <T> request(
+    internal suspend fun <T> request(
         initialUrl: HttpUrl,
         headers: Map<String, String> = emptyMap(),
         accept: (Int) -> Boolean = { it in 200..299 },
+        method: String = "GET",
+        body: RequestBody? = null,
         onSuccess: suspend (Response) -> T,
     ): T {
         var url = initialUrl
@@ -273,7 +278,7 @@ class DriveRestApi(
         var rateLimitedAttempts = 0
         while (true) {
             val token = tokens.accessToken()
-            val builder = Request.Builder().url(url).get()
+            val builder = Request.Builder().url(url).method(method, body)
             headers.forEach { (k, v) -> builder.header(k, v) }
             builder.header("Authorization", "Bearer $token")
             val t0 = System.nanoTime()
@@ -365,7 +370,7 @@ class DriveRestApi(
         return maxOf(exponential, serverHint).coerceIn(1_000, MAX_BACKOFF_MS)
     }
 
-    private fun endpoint(vararg segments: String, query: HttpUrl.Builder.() -> Unit = {}): HttpUrl =
+    internal fun endpoint(vararg segments: String, query: HttpUrl.Builder.() -> Unit = {}): HttpUrl =
         baseUrl.newBuilder()
             .apply { segments.forEach { addPathSegment(it) } }
             .apply(query)

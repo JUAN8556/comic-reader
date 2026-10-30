@@ -12,7 +12,7 @@ interface ComicArchive : Closeable {
     fun pageName(index: Int): String
 
     /**
-     * Extrae la página [index] a [dest] (JPEG/PNG/WebP tal cual; en PDF, un PNG renderizado).
+     * Extrae la página [index] a [dest] (JPEG/PNG/WebP tal cual; en PDF, un JPEG renderizado al ancho de pantalla).
      * En un RAR4 sólido NO debe releer el archivo entero por cada página (O(n²)); junrar ≥ 7.6 da acceso aleatorio.
      */
     fun extractPage(index: Int, dest: File)
