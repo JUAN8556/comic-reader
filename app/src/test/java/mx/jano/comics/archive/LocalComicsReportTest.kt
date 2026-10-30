@@ -23,6 +23,10 @@ import kotlin.random.Random
  */
 class LocalComicsReportTest {
 
+    private companion object {
+        const val CONCLUSIONS_MARKER = "<!-- conclusiones: escritas a mano; el generador conserva desde esta línea -->"
+    }
+
     private class Row(val index: Int, val file: File) {
         var label = ""
         var ext = ""
@@ -76,7 +80,11 @@ class LocalComicsReportTest {
         }
         work.deleteRecursively()
         reportFile.absoluteFile.parentFile?.mkdirs()
-        reportFile.writeText(render(rows, synthetic, timeoutS), Charsets.UTF_8)
+        // Las conclusiones las escribe una persona: si el informe ya existe, se conservan desde la marca.
+        val kept = reportFile.takeIf { it.isFile }?.readText(Charsets.UTF_8)?.let { old ->
+            old.indexOf(CONCLUSIONS_MARKER).takeIf { it >= 0 }?.let { old.substring(it) }
+        }
+        reportFile.writeText(render(rows, synthetic, timeoutS) + (kept?.let { "\n" + it } ?: ""), Charsets.UTF_8)
         println("Informe: ${reportFile.absolutePath}")
     }
 
@@ -280,6 +288,8 @@ class LocalComicsReportTest {
         )
         appendLine()
         appendLine("Ficheros: ${rows.size} (la lista de los que están físicamente en la Mac). Tiempo máximo por fichero: $timeoutS s.")
+        appendLine()
+        appendLine("Las conclusiones están al final (escritas a mano; regenerar el informe las conserva).")
         appendLine()
         appendLine("## Resumen")
         appendLine()
