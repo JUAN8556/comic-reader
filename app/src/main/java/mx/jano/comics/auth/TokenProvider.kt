@@ -34,6 +34,6 @@ object Scopes {
 }
 
 object AuthProviders {
-    /** Implementación con Play Services. La rellena el frente «auth». */
-    fun playServices(context: Context): TokenProvider = TODO("sonda/auth")
+    /** Implementación con Play Services (AuthorizationClient). Vale con el Context de la aplicación. */
+    fun playServices(context: Context): TokenProvider = PlayServicesTokenProvider.get(context)
 }
