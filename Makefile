@@ -15,10 +15,11 @@ DEVICE_CONF   := $(TOOLKIT)/config/device.conf
 SERIAL         = $(shell adb devices 2>/dev/null | sed -n '2p' | cut -f1)
 ADB            = ANDROID_SERIAL=$(SERIAL) adb
 
-.PHONY: help setup doctor keystore sha1 connect dev deploy run logs shot test clean
+.PHONY: help setup doctor keystore sha1 connect dev deploy run logs shot test clean \
+        mig-bin mig-test mig-plan mig-humo migrar mig-verificar mig-indice mig-estado
 
 help: ## esta ayuda
-	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-10s %s\n", $$1, $$2}'
+	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
 
 setup: ## una vez: cmdline-tools + SDK 36 + build-tools + gradle wrapper
 	@tools/setup-toolchain.sh 2>&1 | tee dist/logs/setup-toolchain.log
@@ -55,3 +56,36 @@ test: ## pruebas unitarias JVM
 
 clean: ## borra builds (nunca el keystore ni la caché de la tablet)
 	@./gradlew clean -q
+
+# --- Migración de la biblioteca: iCloud Drive -> Google Drive (docs/MIGRACION.md) ---
+# Datos (estado, registros, portadas, índice, lista de revisión) fuera del repo, que es público.
+COMICS_DATA ?= $(HOME)/comic-reader-data
+MIG         := tools/migracion
+MIG_PY       = env COMICS_DATA="$(COMICS_DATA)" python3 $(MIG)/migrar.py
+HUMO        ?=
+
+mig-bin: $(MIG)/bin/evict ## compila el desalojador de iCloud (Swift, en tools/migracion/bin)
+
+$(MIG)/bin/evict: $(MIG)/evict.swift
+	@mkdir -p $(MIG)/bin && swiftc -O -o $@ $<
+
+mig-test: ## pruebas de la migración (unittest con ficheros sintéticos, sin red)
+	@cd $(MIG) && python3 -m unittest discover -s tests -t .
+
+mig-plan: ## solo lectura: qué haría, cuánto pesa, primera tanda, cuántos a revisión
+	@$(MIG_PY) plan
+
+mig-humo: mig-bin ## prueba de humo real (HUMO='carpeta/relativa'; si no, la de $(COMICS_DATA)/estado/humo.txt)
+	@caffeinate -dimsu $(MIG_PY) humo $(if $(HUMO),"$(HUMO)",)
+
+migrar: mig-bin ## sube la siguiente tanda (~15 GB; TANDA_GB=n la cambia); reanudable
+	@caffeinate -dimsu $(MIG_PY) tanda
+
+mig-verificar: ## compara el md5 de lo subido con Drive (no descarga nada)
+	@$(MIG_PY) verificar
+
+mig-indice: ## regenera y resube Cómics/.indice sin volver a subir cómics
+	@$(MIG_PY) indice
+
+mig-estado: ## resumen: ficheros por estado, tandas, Drive libre
+	@$(MIG_PY) estado

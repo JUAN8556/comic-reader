@@ -20,3 +20,9 @@ No se recoge telemetría ni se comparte nada con terceros.
 
 Este repositorio es la página de inicio y la política de privacidad de la app, según
 exige Google al publicar un proyecto OAuth.
+
+## Migración de la biblioteca
+
+La herramienta que lleva los cómics de iCloud Drive a la carpeta «Cómics» de Google
+Drive, por tandas y con nombres uniformes, está en `tools/migracion/`; cómo funciona y
+cómo se lanza, en [docs/MIGRACION.md](docs/MIGRACION.md) (`make mig-plan`, `make migrar`).

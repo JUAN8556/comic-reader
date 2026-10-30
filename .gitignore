@@ -14,3 +14,6 @@ secrets.properties
 .idea/
 *.iml
 .DS_Store
+# migración: binario compilado y cachés de Python
+/tools/migracion/bin/
+__pycache__/
