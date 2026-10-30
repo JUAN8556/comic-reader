@@ -240,8 +240,10 @@ class PinControllerTest {
         java.io.File(rig.env.books, "b.part.meta").writeText("{}")
         pins.cancel()
         eventually("cancelado") { rig.notifier.cleared == 1 }
-        eventually("parcial de b borrado") { !java.io.File(rig.env.books, "b.part").exists() }
-        assertFalse(java.io.File(rig.env.books, "b.part.meta").exists())
+        // discardPartials borra .part y .part.meta en dos pasos: esperar a los dos, no solo al primero.
+        eventually("parcial de b borrado") {
+            !java.io.File(rig.env.books, "b.part").exists() && !java.io.File(rig.env.books, "b.part.meta").exists()
+        }
         assertEquals(setOf("a"), pins.pins.value)
         assertNull(pins.progress.value)
         assertEquals(Availability.PINNED, rig.cache.availability(a))
