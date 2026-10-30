@@ -11,6 +11,7 @@ class PageEntriesTest {
     @Test fun numeros_por_su_valor() {
         assertEquals(listOf("1.jpg", "2.jpg", "10.jpg"), sorted("10.jpg", "2.jpg", "1.jpg"))
         assertEquals(listOf("p9.jpg", "p10.jpg", "p100.jpg"), sorted("p100.jpg", "p10.jpg", "p9.jpg"))
+        assertEquals(listOf("4.jpg", "30.jpg", "200.jpg"), sorted("30.jpg", "200.jpg", "4.jpg"))
         assertEquals(listOf("page 2 b.jpg", "page 10 a.jpg"), sorted("page 10 a.jpg", "page 2 b.jpg"))
     }
 

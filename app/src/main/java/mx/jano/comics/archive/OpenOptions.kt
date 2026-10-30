@@ -20,11 +20,15 @@ internal const val COPY_BUFFER = 64 * 1024
  *   pedida, en una carpeta oculta `.solid-<huella>` que se borra al cerrar.
  * @property maxRarDictionaryBytes diccionario RAR máximo que se acepta; `null` = la mitad del heap de la app
  *   (en la tablet, unos 128-256 MB). Por encima se lanza [UnsupportedArchiveException] en vez de un OutOfMemoryError.
+ *   El mismo tope vale para la memoria de PPMd en RAR 2.9 (junrar lo comprueba con este valor).
+ * @property directStoredReads leer sin junrar las páginas guardadas de los RAR no sólidos (ver [RarComicArchive]);
+ *   solo se apaga en pruebas, para ejercitar también el camino de junrar.
  */
 data class OpenOptions(
     val pdfTargetWidthPx: Int = 2000,
     val solidStagingParent: File? = null,
     val maxRarDictionaryBytes: Long? = null,
+    internal val directStoredReads: Boolean = true,
 ) {
     init {
         require(pdfTargetWidthPx in 16..16_384) { "pdfTargetWidthPx fuera de rango: $pdfTargetWidthPx" }

@@ -22,7 +22,10 @@ import com.github.junrar.rarfile.FileHeader
 import com.github.junrar.volume.Volume
 import java.io.File
 import java.io.IOException
+import java.io.OutputStream
+import java.io.RandomAccessFile
 import java.util.Locale
+import java.util.zip.CRC32
 
 /**
  * CBR con junrar 8.1.2 (RAR 1.5-4.x, sólido o no, y RAR5).
@@ -57,8 +60,12 @@ internal class RarComicArchive private constructor(
     /** Formato según junrar (RAR15 = 1.5-4.x, RAR50 = RAR5). */
     internal val format: RarFormat? get() = archive.format
 
-    /** Bytes comprimidos que junrar ha leído desde que se abrió (para medir cuánto relee cada página). */
-    internal val packedBytesRead: Long get() = progress.packedRead
+    /** Bytes comprimidos leídos desde que se abrió, por junrar o directos (para medir cuánto relee cada página). */
+    internal val packedBytesRead: Long get() = progress.packedRead + directBytes
+
+    /** Páginas guardadas (sin comprimir) que se leyeron directamente, sin junrar. */
+    internal var storedDirectReads = 0
+        private set
 
     /** Método de la primera página: RAR4 0x30 = guardado … 0x35 = máxima; RAR5 0 = guardado … 5. */
     internal val firstPageMethod: Int? get() = pages.firstOrNull()?.handle?.unpMethod?.toInt()
@@ -79,13 +86,16 @@ internal class RarComicArchive private constructor(
             if (closed) throw IOException(ArchiveTexts.closed(source))
             try {
                 if (stager == null) {
-                    writeAtomically(dest) { out -> archive.extractFile(page.handle, out) }
+                    if (canReadStoredDirectly(page.handle)) {
+                        writeAtomically(dest) { out -> copyStored(page.handle, out) }
+                    } else {
+                        writeAtomically(dest) { out -> archive.extractFile(page.handle, out) }
+                    }
                 } else {
-                    val staged = stager.stage(stagingDirFor(dest), index)
-                    writeAtomically(dest) { out -> staged.inputStream().use { it.copyToStream(out) } }
+                    deliver(stager.stage(stagingDirFor(dest), index), dest)
                 }
             } catch (e: RarException) {
-                throw mapRarException(e, kind, source)
+                throw mapRarException(e, kind, source, options.effectiveMaxDictionary())
             } catch (e: ComicArchiveException) {
                 throw e
             } catch (e: IOException) {
@@ -98,8 +108,17 @@ internal class RarComicArchive private constructor(
         }
     }
 
-    private fun decompressEntry(entryIndex: Int, out: java.io.OutputStream) {
+    private fun decompressEntry(entryIndex: Int, out: OutputStream) {
         archive.extractFile(allHeaders[entryIndex], out)
+    }
+
+    /**
+     * Entrega una página de la caché de sólidos copiándola (en streaming y con `rename` atómico al final).
+     * No se usan enlaces duros: la política SELinux de Android niega `link` a las apps normales
+     * (`neverallow untrusted_app file_type:file link`). La copia de 1-3 MB es pequeña frente a descomprimir.
+     */
+    private fun deliver(staged: File, dest: File) {
+        writeAtomically(dest) { out -> staged.inputStream().use { it.copyToStream(out) } }
     }
 
     private fun stagingDirFor(dest: File): File {
@@ -113,12 +132,59 @@ internal class RarComicArchive private constructor(
         return dir
     }
 
+    // ------------------------------------------------------------------ entradas guardadas, sin junrar
+
+    private var raw: RandomAccessFile? = null
+    private var directBytes = 0L
+
+    /**
+     * Las entradas GUARDADAS (método 0x30 en RAR4, 0 en RAR5) de un archivo NO sólido se leen tal cual del fichero,
+     * comprobando la CRC32 de la cabecera, sin pasar por junrar. Motivo, medido con cómics reales: en junrar 8.1.2
+     * `Unpack.doUnpack` llama a `unstoreFile()` y, sin salir, cae también en `unpack29()`, que interpreta como tablas
+     * lo que quedó en el búfer de la entrada anterior; a veces eso «pide» un modelo PPMd de hasta 256 MB y revienta con
+     * OutOfMemoryError (2 de 141 RAR4 locales). De paso, lo guardado se lee a velocidad de disco y no a ~25 MB/s.
+     * En sólidos no se toca: ahí cada entrada tiene que pasar por el descompresor.
+     */
+    private fun canReadStoredDirectly(h: FileHeader): Boolean {
+        if (!options.directStoredReads || isSolid) return false
+        if (h.isEncrypted || h.isSplitAfter || h.isSplitBefore || h.isDirectory || !h.hasFileCrc()) return false
+        val stored = if (h.isRar5Family) h.unpMethod.toInt() == 0 else h.unpMethod.toInt() == 0x30
+        if (!stored || h.fullPackSize != h.fullUnpackSize || h.fullPackSize < 0) return false
+        return h.getDataStartOffset(false) > 0
+    }
+
+    private fun copyStored(h: FileHeader, out: OutputStream) {
+        val file = raw ?: RandomAccessFile(source, "r").also { raw = it }
+        val start = h.getDataStartOffset(false)
+        var remaining = h.fullPackSize
+        if (start + remaining > file.length()) {
+            throw CorruptArchiveException(kind, ArchiveTexts.corrupt(source, "la página «${h.fileName}» está cortada"))
+        }
+        val crc = CRC32()
+        val buffer = ByteArray(COPY_BUFFER)
+        file.seek(start)
+        while (remaining > 0) {
+            val n = file.read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
+            if (n < 0) throw CorruptArchiveException(kind, ArchiveTexts.corrupt(source, "la página «${h.fileName}» está cortada"))
+            crc.update(buffer, 0, n)
+            out.write(buffer, 0, n)
+            remaining -= n
+            directBytes += n
+        }
+        if (crc.value.toInt() != h.fileCRC) {
+            throw CorruptArchiveException(kind, ArchiveTexts.corrupt(source, "la CRC de «${h.fileName}» no coincide"))
+        }
+        storedDirectReads++
+    }
+
     override fun close() {
         if (closed) return
         closed = true
         // Primero el canal (aborta una extracción en curso en otro hilo) y luego, con el lock, la caché.
         runCatching { archive.close() }
         synchronized(lock) {
+            runCatching { raw?.close() }
+            raw = null
             stagingDir?.deleteRecursively()
             stagingDir = null
         }

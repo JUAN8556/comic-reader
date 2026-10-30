@@ -33,20 +33,42 @@ class RarComicArchiveTest {
     private fun write(name: String, solid: Boolean, entries: List<Rar4TestWriter.Entry> = sampleEntries()) =
         tmp.newFile(name).also { Rar4TestWriter.write(it, entries, solid) }
 
-    @Test fun no_solido_orden_natural_y_contenido() {
+    @Test fun no_solido_orden_natural_y_contenido_por_los_dos_caminos() {
         val f = write("plano.cbr", solid = false)
-        ComicArchives.open(f).use { a ->
-            assertEquals(ArchiveKind.RAR4, a.kind)
-            assertFalse((a as RarComicArchive).isSolid)
-            assertEquals(expectedOrder, (0 until a.pageCount).map(a::pageName))
-            val dir = tmp.newFolder("p")
-            // Hacia atrás: en un no sólido cada página es independiente.
-            for (i in a.pageCount - 1 downTo 0) {
-                val dest = File(dir, "$i")
-                a.extractPage(i, dest)
-                assertArrayEquals(page(expectedSeed[i]), dest.readBytes())
+        // Lectura directa de lo guardado (lo normal) y junrar a secas (lo que usan las entradas comprimidas).
+        for (direct in listOf(true, false)) {
+            (ComicArchives.open(f, OpenOptions(directStoredReads = direct)) as RarComicArchive).use { a ->
+                assertEquals(ArchiveKind.RAR4, a.kind)
+                assertFalse(a.isSolid)
+                assertEquals(expectedOrder, (0 until a.pageCount).map(a::pageName))
+                val dir = tmp.newFolder("p$direct")
+                // Hacia atrás: en un no sólido cada página es independiente.
+                for (i in a.pageCount - 1 downTo 0) {
+                    val dest = File(dir, "$i")
+                    a.extractPage(i, dest)
+                    assertArrayEquals(page(expectedSeed[i]), dest.readBytes())
+                }
+                assertEquals(a.pageCount, dir.listFiles()!!.size) // sin carpeta .solid ni temporales
+                assertEquals(if (direct) a.pageCount else 0, a.storedDirectReads)
             }
-            assertEquals(a.pageCount, dir.listFiles()!!.size) // sin carpeta .solid ni temporales
+        }
+    }
+
+    @Test fun guardado_directo_detecta_crc_mala() {
+        val f = write("crc.cbr", solid = false)
+        // Se estropea un byte dentro de los datos de «10.jpg» (la primera entrada, justo tras su cabecera).
+        val bytes = f.readBytes()
+        val at = 7 + 13 + 32 + "10.jpg".length + 100
+        bytes[at] = (bytes[at].toInt() xor 0xFF).toByte()
+        f.writeBytes(bytes)
+        ComicArchives.open(f).use { a ->
+            val e = runCatching { a.extractPage(2, tmp.newFile()) }.exceptionOrNull() // «10.jpg» es la página 2
+            assertTrue("$e", e is CorruptArchiveException)
+            assertTrue(e!!.message!!, e.message!!.contains("CRC"))
+            // Las demás siguen bien.
+            val ok = tmp.newFile()
+            a.extractPage(0, ok)
+            assertArrayEquals(page(1), ok.readBytes())
         }
     }
 
@@ -74,11 +96,13 @@ class RarComicArchiveTest {
         }
         // Cada página se pidió al motor una sola vez, aunque se pidieron 6.
         assertEquals(4, a.solidDecompressCalls)
-        assertTrue(dir.listFiles()!!.any { it.name.startsWith(".solid-") })
+        val staging = dir.listFiles()!!.single { it.name.startsWith(".solid-") }
+        assertEquals(4, staging.listFiles()!!.size)
         a.close()
-        assertFalse(dir.listFiles()!!.any { it.name.startsWith(".solid-") })
-        // Las páginas entregadas se quedan.
+        assertFalse(staging.exists())
+        // Las páginas entregadas se quedan, enteras, aunque la caché se borre.
         assertEquals(4, dir.listFiles()!!.size)
+        for (i in 0 until 4) assertArrayEquals(page(expectedSeed[i]), File(dir, "$i.img").readBytes())
     }
 
     @Test fun solido_no_relee_el_archivo_por_pagina() {
