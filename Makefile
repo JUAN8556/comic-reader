@@ -16,7 +16,7 @@ SERIAL         = $(shell adb devices 2>/dev/null | sed -n '2p' | cut -f1)
 ADB            = ANDROID_SERIAL=$(SERIAL) adb
 
 .PHONY: help setup doctor keystore sha1 connect dev deploy run logs shot test clean \
-        mig-bin mig-test mig-plan mig-humo migrar mig-verificar mig-indice mig-estado
+        mig-bin mig-test mig-plan mig-humo migrar mig-maraton mig-verificar mig-indice mig-estado
 
 help: ## esta ayuda
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -80,6 +80,9 @@ mig-humo: mig-bin ## prueba de humo real (HUMO='carpeta/relativa'; si no, la de 
 
 migrar: mig-bin ## sube la siguiente tanda (~15 GB; TANDA_GB=n la cambia); reanudable
 	@caffeinate -dimsu $(MIG_PY) tanda
+
+mig-maraton: mig-bin ## encadena tandas hasta que no quede nada (en segundo plano, registro en logs/maraton-AAAAMMDD.log)
+	@nohup zsh tools/migracion/maraton.sh > /dev/null 2>&1 & echo "maratón lanzado; sigue con: tail -f $(COMICS_DATA)/logs/maraton-$$(date +%Y%m%d).log"
 
 mig-verificar: ## compara el md5 de lo subido con Drive (no descarga nada)
 	@$(MIG_PY) verificar
