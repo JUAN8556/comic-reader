@@ -203,3 +203,16 @@ class Renombres(unittest.TestCase):
         self.assertTrue(plan.nombres["Marvel/Clara/Clara 01.cbr"]["interpretado"])
         # los demás, como siempre
         self.assertNotIn("728.5", plan.nombres["Marvel/Dudosa/Dudosa 01.cbr"]["destino"])
+
+
+class FicheroConEntradaPropia(unittest.TestCase):
+    def test_un_fichero_sale_de_su_carpeta(self):
+        tax = {nombres.ruta_normalizada(k): v for k, v in TAXONOMIA.items()}
+        tax["Marvel/Clara/Clara 01.cbr"] = {"categoria": "Manga", "editorial_carpeta": None, "serie_canonica": "Otra Obra",
+                                           "subcarpeta": None, "revisar": False}
+        censo = CENSO + [fichero("Marvel/Clara/Clara 02.cbr")]
+        info = migrar.resolver_series(censo, tax, {"primer_nivel": {}, "raiz": {}})
+        propio = info["file:Marvel/Clara/Clara 01.cbr"]
+        self.assertEqual((propio["categoria"], propio["serie"]), ("Manga", "Otra Obra"))
+        self.assertEqual(info["Marvel/Clara"]["n"], 1)
+        self.assertEqual(migrar.info_serie(info, censo[-1])["carpeta"], "Marvel/Clara")

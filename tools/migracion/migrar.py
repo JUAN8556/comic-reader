@@ -487,6 +487,19 @@ def resolver_series(censo: list[dict], taxonomia: dict, locales: dict) -> dict[s
                     "carpeta": carpeta, "suelto": True, "n": 1, **_campos_tax(v),
                 }
             continue
+        # un fichero con entrada propia en taxonomia.json sale de su carpeta a su propia serie
+        propios = []
+        for f in fs:
+            vf = _valida_tax(taxonomia[f["ruta_nfc"]]) if f["ruta_nfc"] in taxonomia else None
+            if vf:
+                propios.append(f)
+                info["file:" + f["ruta_nfc"]] = {
+                    "categoria": vf["categoria"], "editorial": vf["editorial"], "serie": vf["serie"],
+                    "fuente": "taxonomia", "carpeta": carpeta, "suelto": True, "n": 1, **_campos_tax(vf)}
+        if propios:
+            fs = [f for f in fs if f not in propios]
+            if not fs:
+                continue
         tax = taxonomia.get(carpeta)
         v = _valida_tax(tax) if tax else None
         if v:
