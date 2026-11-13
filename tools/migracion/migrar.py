@@ -97,6 +97,8 @@ class Config:
         self.series_meta = os.path.join(self.dir_metadatos, "series.jsonl")
         # nombres a mano: {ruta en iCloud (NFC): nombre base en Drive, sin extensión}; lo usan las fusiones de duplicados
         self.renombres = os.path.join(self.dir_metadatos, "renombres.json")
+        # copias que se suben aunque su md5 ya esté en Drive (rellenan el hueco de una serie o de un orden de lectura)
+        self.copias_permitidas = os.path.join(self.dir_metadatos, "copias_permitidas.json")
         self.heuristica_local = os.path.join(self.dir_estado, "heuristica-local.json")
 
     def crear_dirs(self):
@@ -995,9 +997,15 @@ def listar_drive(cfg: Config, log: Registro, carpetas: set[str]) -> tuple[dict[s
     return out, sin_listar
 
 
+def copias_permitidas(cfg: Config) -> set[str]:
+    datos = cargar_json(cfg.copias_permitidas) or []
+    return {nombres.ruta_normalizada(x) for x in datos if isinstance(x, str)}
+
+
 def procesar(cfg: Config, conn: sqlite3.Connection, log: Registro, tanda_id: int,
              rutas: list[str], tiempos: dict) -> dict:
     """Materializa, analiza, sube, verifica y desaloja los ficheros dados, por lotes."""
+    permitidas = copias_permitidas(cfg)
     if not os.access(BIN_EVICT, os.X_OK):
         raise SystemExit(f"Falta {BIN_EVICT}: compílalo con «make mig-bin».")
     resumen = Counter()
@@ -1071,6 +1079,9 @@ def procesar(cfg: Config, conn: sqlite3.Connection, log: Registro, tanda_id: int
                 "SELECT ruta FROM ficheros WHERE md5=? AND ruta<>? AND estado IN "
                 "('pendiente','subido','verificado','desalojado') AND (estado<>'pendiente' OR tanda IS NOT NULL) "
                 "AND integridad IS NOT NULL ORDER BY ruta LIMIT 1", (res["md5"], r)).fetchone()
+            if dup and fila["ruta_nfc"] in permitidas:
+                log(f"    copia permitida (rellena su serie; ya está en {nombres.ruta_normalizada(dup['ruta'])}): {fila['ruta_nfc']}")
+                dup = None
             if dup:
                 actualizar(conn, r, estado="apartado_duplicado", duplicado_de=dup["ruta"], **comunes)
                 resumen["apartado_duplicado"] += 1

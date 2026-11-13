@@ -216,3 +216,22 @@ class FicheroConEntradaPropia(unittest.TestCase):
         self.assertEqual((propio["categoria"], propio["serie"]), ("Manga", "Otra Obra"))
         self.assertEqual(info["Marvel/Clara"]["n"], 1)
         self.assertEqual(migrar.info_serie(info, censo[-1])["carpeta"], "Marvel/Clara")
+
+
+class CopiasPermitidas(unittest.TestCase):
+    def test_lee_la_lista_en_nfc(self):
+        tmp = tempfile.mkdtemp(prefix="mig-cp-")
+        os.makedirs(os.path.join(tmp, "metadatos"))
+        import unicodedata
+        with open(os.path.join(tmp, "metadatos", "copias_permitidas.json"), "w", encoding="utf-8") as f:
+            json.dump([unicodedata.normalize("NFD", "Marvel/Onslaught/17 - Generación X.cbr")], f)
+        previo = os.environ.get("COMICS_DATA")
+        os.environ["COMICS_DATA"] = tmp
+        try:
+            cp = migrar.copias_permitidas(migrar.Config())
+        finally:
+            if previo is None:
+                os.environ.pop("COMICS_DATA", None)
+            else:
+                os.environ["COMICS_DATA"] = previo
+        self.assertEqual(cp, {"Marvel/Onslaught/17 - Generación X.cbr"})
