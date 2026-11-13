@@ -180,3 +180,26 @@ class PlanEnEspera(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Renombres(unittest.TestCase):
+    def test_nombre_fijado_a_mano(self):
+        tmp = tempfile.mkdtemp(prefix="mig-ren-")
+        os.makedirs(os.path.join(tmp, "data", "metadatos"))
+        with open(os.path.join(tmp, "data", "metadatos", "taxonomia.json"), "w", encoding="utf-8") as f:
+            json.dump(TAXONOMIA, f, ensure_ascii=False)
+        with open(os.path.join(tmp, "data", "metadatos", "renombres.json"), "w", encoding="utf-8") as f:
+            json.dump({"Marvel/Clara/Clara 01.cbr": "728.5 Clara #687.1"}, f, ensure_ascii=False)
+        previo = os.environ.get("COMICS_DATA")
+        os.environ["COMICS_DATA"] = os.path.join(tmp, "data")
+        try:
+            plan = migrar.Plan(migrar.Config(), CENSO, None)
+        finally:
+            if previo is None:
+                os.environ.pop("COMICS_DATA", None)
+            else:
+                os.environ["COMICS_DATA"] = previo
+        self.assertEqual(plan.nombres["Marvel/Clara/Clara 01.cbr"]["destino"], "Americano/Marvel/Clara/728.5 Clara #687.1.cbr")
+        self.assertTrue(plan.nombres["Marvel/Clara/Clara 01.cbr"]["interpretado"])
+        # los demás, como siempre
+        self.assertNotIn("728.5", plan.nombres["Marvel/Dudosa/Dudosa 01.cbr"]["destino"])

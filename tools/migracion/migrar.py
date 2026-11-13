@@ -95,6 +95,8 @@ class Config:
         self.db = os.path.join(self.dir_estado, "migracion.sqlite")
         self.taxonomia = os.path.join(self.dir_metadatos, "taxonomia.json")
         self.series_meta = os.path.join(self.dir_metadatos, "series.jsonl")
+        # nombres a mano: {ruta en iCloud (NFC): nombre base en Drive, sin extensión}; lo usan las fusiones de duplicados
+        self.renombres = os.path.join(self.dir_metadatos, "renombres.json")
         self.heuristica_local = os.path.join(self.dir_estado, "heuristica-local.json")
 
     def crear_dirs(self):
@@ -581,6 +583,8 @@ class Plan:
         self.cfg = cfg
         self.censo = censo
         self.taxonomia = cargar_taxonomia(cfg)
+        self.renombres = {nombres.ruta_normalizada(k): nombres.nfc(v)
+                          for k, v in (cargar_json(cfg.renombres) or {}).items() if isinstance(v, str) and v.strip()}
         self.locales = cargar_heuristica_local(cfg)
         self.series = resolver_series(censo, self.taxonomia, self.locales)
         self.db = {}
@@ -604,7 +608,12 @@ class Plan:
                                            "anio": fila["anio"], "base": None}
                 continue
             ext = EXT_FORMATO_DB(fila) or ext_declarada(os.path.basename(f["ruta_nfc"]))
-            r = nombrar(f, si, ext)
+            base_fija = self.renombres.get(f["ruta_nfc"])
+            if base_fija:
+                r = {"base": base_fija, "interpretado": True, "motivo": None, "numero": None, "anio": None,
+                     "destino": destino_de(si, base_fija, ext)}
+            else:
+                r = nombrar(f, si, ext)
             r = resolver_choque(r, f, si, ext, ocupados)
             ocupados[r["destino"].casefold()] = f["ruta"]
             self.nombres[f["ruta"]] = r
